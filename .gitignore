@@ -1,0 +1,5 @@
+# Geheimen en lokale data nooit in git
+.env
+data/
+__pycache__/
+*.pyc

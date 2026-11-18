@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BPA Command Center</title>
+<style>
+  :root{
+    --bg:#0a0f1a; --rail:#0b111c; --panel:#111827; --panel2:#172133; --panel3:#1d2940;
+    --line:#232e42; --line2:#2c3a52; --ink:#e6ebf2; --ink2:#c3cbd8; --muted:#8a94a7; --dim:#5f6b80;
+    --teal:#4fd1c5; --teal2:#2bb3a8; --lav:#a48cf0; --ok:#4fd1c5; --bad:#ff5a6a;
+    --crit:#ff4757; --high:#ff6b81; --wrn:#f5a524; --inf:#4c8dff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font:14px/1.5 Inter,"SF Pro Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);
+    -webkit-font-smoothing:antialiased}
+  ::selection{background:rgba(79,209,197,.3)}
+  ::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-thumb{background:#2a3548;border-radius:6px;border:2px solid var(--panel)}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* ---------- Shell ---------- */
+  .shell{display:grid;grid-template-columns:64px 340px 1fr;height:100vh}
+  @media (max-width:1520px){.shell{grid-template-columns:64px 300px 1fr}.inner{padding:22px 24px 60px}}
+  @media (max-width:1050px){.shell{grid-template-columns:64px 1fr;height:auto}.side{border-right:0}.content{grid-column:1 / -1}}
+  .rail{background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:18px 0;gap:6px}
+  .logo{width:34px;height:34px;margin-bottom:22px}
+  .rail button{width:40px;height:40px;border-radius:9px;background:none;border:0;color:var(--muted);display:grid;place-items:center;cursor:pointer;padding:0}
+  .rail button:hover{background:var(--panel2);color:var(--ink)}
+  .rail button.on{background:var(--panel3);color:var(--ink)}
+  .rail .sp{flex:1}
+  .rail svg{width:20px;height:20px}
+
+  .side{background:var(--panel);border-right:1px solid var(--line);overflow:auto;padding:22px 18px 30px}
+  .side h2{font-size:17px;font-weight:500;letter-spacing:.02em;color:var(--ink2);margin:6px 4px 16px}
+  .sec{font-size:12px;font-weight:600;color:var(--muted);margin:24px 4px 10px;letter-spacing:.03em;display:flex;align-items:center;gap:8px}
+  .sec .cnt{background:var(--panel3);color:var(--ink2);border-radius:9px;padding:0 7px;font-size:11px}
+
+  .content{overflow:auto;position:relative}
+  .content::before{content:"";position:absolute;inset:0 0 auto 0;height:260px;pointer-events:none;
+    background:radial-gradient(60% 120% at 50% -30%, rgba(79,209,197,.13), transparent 70%)}
+  .inner{max-width:1500px;margin:0 auto;padding:22px 36px 60px;position:relative}
+
+  /* ---------- Topbar ---------- */
+  .topbar{display:flex;align-items:center;gap:12px;min-height:34px}
+  .crumb{color:var(--muted);font-size:14px} .crumb b{color:var(--ink2);font-weight:400}
+  .crumb span{margin:0 10px;color:var(--dim)}
+  .env{margin-left:auto;display:inline-flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line2);
+    border-radius:8px;padding:5px 12px;font-size:13px;color:var(--ink2)}
+  .env svg{width:14px;height:14px;color:var(--muted)}
+  .env.mock{border-color:rgba(245,165,36,.5);color:var(--wrn)}
+  h1{font-size:34px;font-weight:300;letter-spacing:.01em;margin:22px 0 4px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  h1 small{font-size:14px;color:var(--muted);font-weight:400}
+
+  /* ---------- Formulieren ---------- */
+  label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin:14px 0 6px}
+  label.chk{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--ink2);font-weight:400;cursor:pointer}
+  input,select{width:100%;padding:9px 12px;border:1px solid var(--line2);border-radius:8px;font:inherit;color:var(--ink);background:var(--panel2);outline:none}
+  input::placeholder{color:var(--dim)}
+  input:focus,select:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(79,209,197,.15)}
+  select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+    background-position:calc(100% - 16px) 52%,calc(100% - 11px) 52%;background-size:5px 5px;background-repeat:no-repeat;padding-right:30px}
+  input[type=checkbox]{appearance:none;width:16px;height:16px;padding:0;border:1px solid var(--line2);border-radius:4px;background:var(--panel2);margin-top:2px;flex:none;cursor:pointer;display:grid;place-items:center}
+  input[type=checkbox]:checked{background:var(--teal);border-color:var(--teal)}
+  input[type=checkbox]:checked::after{content:"";width:8px;height:4px;border:2px solid #0a0f1a;border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
+  .hint{font-size:12px;color:var(--dim);margin-top:4px;line-height:1.45}
+
+  .drop{border:1.5px dashed var(--line2);border-radius:var(--r);padding:26px 16px;text-align:center;cursor:pointer;color:var(--muted);
+    background:linear-gradient(180deg,rgba(79,209,197,.03),transparent);transition:.15s}
+  .drop svg{width:30px;height:30px;color:var(--teal);margin-bottom:6px}
+  .drop.over,.drop:hover{border-color:var(--teal);color:var(--ink2);background:rgba(79,209,197,.06)}
+  .drop strong{color:var(--ink);font-weight:500}
+  .file-info{margin-top:10px;font-size:12.5px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--teal);border-radius:8px;padding:9px 12px;display:none;color:var(--ink2)}
+
+  details.box{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+  details.box summary{cursor:pointer;font-weight:500;font-size:13px;color:var(--ink2);list-style:none;display:flex;align-items:center;gap:8px}
+  details.box summary::before{content:"";width:6px;height:6px;border:solid var(--muted);border-width:0 1.5px 1.5px 0;transform:rotate(-45deg);transition:.15s}
+  details.box[open] summary::before{transform:rotate(45deg)}
+
+  button,.btn{font:inherit;border:0;border-radius:8px;cursor:pointer;font-weight:500;text-decoration:none;display:inline-flex;align-items:center;gap:8px;color:var(--ink)}
+  .primary{width:100%;justify-content:center;margin-top:18px;padding:11px;background:var(--panel3);border:1px solid var(--line2);font-size:14.5px}
+  .primary:not(:disabled):hover{border-color:var(--teal);box-shadow:0 0 0 3px rgba(79,209,197,.12)}
+  .primary:disabled{opacity:.45;cursor:not-allowed}
+  .ring{width:16px;height:16px;flex:none}
+  .ghost{background:var(--panel2);border:1px solid var(--line2);padding:7px 12px;font-size:13px;color:var(--ink2)}
+  .ghost:hover{border-color:#3b4b66;color:var(--ink)}
+  .ghost.danger:hover{border-color:var(--bad);color:var(--bad)}
+  .ghost svg{width:15px;height:15px}
+  .err{color:var(--bad);font-size:13px;margin-top:10px}
+
+  /* ---------- Historiek ---------- */
+  .tasks{display:flex;flex-direction:column;gap:2px}
+  .task{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;border-left:3px solid transparent}
+  .task:hover{background:var(--panel2)}
+  .task.sel{background:var(--panel3);border-left-color:var(--lav)}
+  .task .name{flex:1;min-width:0}
+  .task .name div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .task .name b{font-weight:500}
+  .task .sub{font-size:12px;color:var(--muted)}
+  .badge{font-size:11.5px;font-weight:500;padding:2px 9px;border-radius:6px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;color:var(--ink2);background:var(--panel2);border:1px solid var(--line2)}
+  .badge i{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+  .badge.DONE i{background:var(--teal)} .badge.FAILED i{background:var(--bad)}
+  .badge.run i{background:var(--wrn);animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+  .empty{color:var(--dim);text-align:center;padding:26px 0;font-size:13px}
+
+  /* ---------- Detail ---------- */
+  .actions{margin-left:auto;display:flex;gap:8px;font-size:14px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .chip{display:inline-flex;gap:6px;align-items:center;background:var(--panel);border:1px solid var(--line2);border-radius:7px;padding:5px 11px;font-size:13px;color:var(--muted)}
+  .chip b{color:var(--ink);font-weight:500}
+  .log{font:12px/1.7 var(--mono);background:#070b13;border:1px solid var(--line);color:var(--ink2);border-radius:var(--r);padding:12px 14px;max-height:150px;overflow:auto;margin-top:16px}
+  .log .t{color:var(--teal);opacity:.8;margin-right:10px}
+  .log .error{color:#ff8a95} .log .warn{color:#ffc56b}
+
+  .hero{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;min-height:62vh;color:var(--muted)}
+  .hero svg{width:180px;height:180px;margin-bottom:20px}
+  .hero h3{font-weight:300;font-size:24px;color:var(--ink);margin:0 0 6px}
+
+  /* Kaarten met donuts */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);margin:26px 0 8px;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+  .kpi{padding:20px 24px;min-width:0;box-shadow:1px 0 0 var(--line),0 1px 0 var(--line)}
+  .kpis{overflow:hidden}
+  @media (max-width:1760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:820px){.kpis{grid-template-columns:1fr}}
+  .kpi h4{margin:0 0 14px;font-size:14px;font-weight:400;color:var(--ink2)}
+  .kpi .body{display:flex;align-items:center;gap:20px}
+  .donut{width:108px;height:108px;flex:none}
+  .donut text{fill:var(--ink);font-family:inherit}
+  .legend{display:flex;flex-direction:column;gap:7px;font-size:13px;min-width:0}
+  .legend div{display:flex;align-items:center;gap:10px;white-space:nowrap;cursor:default}
+  .legend div[data-sev],.legend div[data-state],.legend div[data-type]{cursor:pointer}
+  .legend div[data-sev]:hover span,.legend div[data-state]:hover span,.legend div[data-type]:hover span{color:var(--ink)}
+  .legend i{width:4px;height:13px;border-radius:2px;flex:none}
+  .legend b{font-weight:500;min-width:30px;font-variant-numeric:tabular-nums}
+  .legend span{color:var(--muted)}
+
+  .types{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 24px;margin-top:16px}
+  .types h4{margin:0 0 12px;font-size:14px;font-weight:400;color:var(--ink2)}
+  .tgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 40px}
+  @media (max-width:900px){.tgrid{grid-template-columns:1fr}}
+  .bar{display:grid;grid-template-columns:minmax(120px,190px) 1fr 44px;gap:12px;align-items:center;font-size:13px;padding:5px 0;cursor:pointer}
+  .bar:hover .lbl{color:var(--ink)}
+  .bar .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2)}
+  .bar .track{height:6px;background:#1f2a3d;border-radius:4px;overflow:hidden;display:flex}
+  .bar .track i{background:linear-gradient(90deg,var(--teal2),var(--teal));border-radius:4px}
+  .bar .num{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  /* Tabs + filters */
+  .tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin:30px 0 16px}
+  .tabs button{background:none;border-radius:0;padding:10px 14px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:400;font-size:14.5px}
+  .tabs button:hover{color:var(--ink2)}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--teal)}
+  .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  .filters .fi{position:relative}
+  .filters .fi svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--muted)}
+  .filters input{width:250px;padding-left:34px}
+  .filters select{width:auto;background-color:var(--panel)}
+  .filters select.set{border-color:var(--lav);color:var(--ink)}
+  .filters .sp{flex:1}
+  .count{color:var(--ink2);font-size:14px}
+
+  .tw{max-height:640px;overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{border-bottom:1px solid var(--line);text-align:left;padding:12px 14px;vertical-align:middle}
+  th{background:var(--panel);font-weight:400;color:var(--muted);position:sticky;top:0;z-index:1;white-space:nowrap;font-size:13.5px}
+  tbody tr:hover td{background:#141d2e}
+  tr.grp{cursor:pointer}
+  tr.grp td:nth-child(2){color:var(--ink);min-width:260px}
+  td.nw{white-space:nowrap}
+  @media (max-width:1520px){th,td{padding:10px 10px} tr.grp td:nth-child(2){min-width:150px} .nbox{min-width:30px;padding:1px 5px} .mini{display:none} .pill{white-space:normal} .sev{gap:6px}}
+  tr.sub td{background:#0d1422;font-size:12.5px;padding:8px 14px}
+  tr.sub:hover td{background:#0f1726}
+  .caret{display:inline-block;width:14px;color:var(--muted)}
+  tr.desc td{background:#0d1422;color:var(--muted);font-size:12.5px;padding:10px 14px 12px;border-left:2px solid var(--teal)}
+
+  .sev{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+  .sev svg{width:18px;height:18px;flex:none}
+  .st{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+  .st svg{width:15px;height:15px}
+  .st-pass{color:var(--teal)} .st-fail{color:var(--bad)} .st-excepted{color:var(--lav)}
+  .st span{color:var(--ink)}
+  .nbox{display:inline-block;min-width:38px;text-align:center;border:1px solid var(--line2);border-radius:6px;padding:1px 8px;font-variant-numeric:tabular-nums;background:var(--panel2)}
+  .nbox.f{color:#ff9aa4} .nbox.p{color:var(--teal)} .nbox.zero{color:var(--dim)}
+  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);border-radius:6px;padding:2px 10px 2px 7px;background:var(--panel2);white-space:nowrap;font-size:12.5px}
+  .pill::before{content:"";width:3px;height:14px;border-radius:2px;background:var(--lav)}
+  .pill.dev::before{background:var(--teal)} .pill.net::before{background:var(--inf)} .pill.pol::before{background:var(--lav)} .pill.obj::before{background:var(--wrn)}
+  .mini{height:5px;background:#1f2a3d;border-radius:3px;overflow:hidden;width:64px;display:inline-block;vertical-align:middle;margin-right:8px}
+  .mini i{display:block;height:100%;background:linear-gradient(90deg,var(--teal2),var(--teal))}
+  .muted{color:var(--muted)} .note{font-size:12.5px;color:var(--muted);margin-top:8px}
+
+  .tree{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;font-size:13px}
+  .tree details{margin:0;padding:0 0 0 16px;border-left:1px solid var(--line)}
+  .tree>details{padding-left:0;border-left:0}
+  .tree summary{font-weight:500;padding:3px 0;cursor:pointer;color:var(--ink2)}
+  .kv{display:grid;grid-template-columns:minmax(120px,max-content) 1fr;gap:2px 14px;padding:3px 0 6px 16px;font-size:12.5px}
+  .kv .k{color:var(--muted)}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="gTeal" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7ee8dc"/><stop offset="1" stop-color="#2bb3a8"/></linearGradient>
+    <symbol id="i-chev2" viewBox="0 0 24 24"><path d="M6 13l6-5 6 5M6 18l6-5 6 5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-chev1" viewBox="0 0 24 24"><path d="M6 15l6-5 6 5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-dia" viewBox="0 0 24 24"><path d="M12 3l9 9-9 9-9-9z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8.5l3.5 3.5-3.5 3.5-3.5-3.5z" fill="currentColor"/></symbol>
+    <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.6 2.6L16 9.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+
+<div class="shell">
+  <nav class="rail">
+    <svg class="logo" viewBox="0 0 40 40" aria-label="BPA">
+      <circle cx="20" cy="20" r="16" fill="none" stroke="url(#gTeal)" stroke-width="3.5" stroke-dasharray="78 23" transform="rotate(-50 20 20)" stroke-linecap="round"/>
+      <circle cx="20" cy="20" r="8.5" fill="none" stroke="#a48cf0" stroke-width="3" stroke-dasharray="40 14" transform="rotate(130 20 20)" stroke-linecap="round"/>
+    </svg>
+    <button class="on" title="Assessments" id="navHome"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></button>
+    <button title="Nieuwe assessment" id="navNew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg></button>
+    <button title="Historiek" id="navHist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
+    <span class="sp"></span>
+    <button title="API-credentials" id="navCred"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-1.8-.3 1.6 1.6 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.6 1.6 0 00-1-1.5 1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00.3-1.8 1.6 1.6 0 00-1.5-1H3a2 2 0 110-4h.1a1.6 1.6 0 001.5-1 1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H9a1.6 1.6 0 001-1.5V3a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V9a1.6 1.6 0 001.5 1H21a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/></svg></button>
+  </nav>
+
+  <aside class="side">
+    <h2>Best Practice Assessment</h2>
+    <form id="f" autocomplete="off">
+      <div class="drop" id="drop">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+        <div><strong>Sleep je configuratie hierheen</strong></div>
+        <div style="font-size:13px">of klik om een XML-bestand te kiezen</div>
+        <div class="hint">running- of merged-config van een firewall of Panorama</div>
+      </div>
+      <input type="file" id="file" accept=".xml,text/xml" class="hidden">
+      <div class="file-info" id="fileInfo"></div>
+
+      <label for="label">Label</label>
+      <input id="label" placeholder="bv. klant – fw-brussel-01">
+      <div class="hint">Standaard de hostname uit de config.</div>
+
+      <label class="chk" style="margin-top:16px"><input type="checkbox" id="delAfter" checked>
+        <span>Config bij Palo Alto verwijderen na verwerking</span></label>
+
+      <details class="box" id="credBox">
+        <summary>API-credentials</summary>
+        <div id="credNote" class="hint" style="margin-top:8px"></div>
+        <label>TSG ID</label><input id="tsg">
+        <label>Client ID</label><input id="cid" placeholder="naam@123456789.iam.panserviceaccount.com">
+        <label>Client Secret</label><input id="csec" type="password">
+        <label class="chk" style="margin-top:12px"><input type="checkbox" id="remember"> <span>TSG ID en Client ID onthouden</span></label>
+      </details>
+
+      <button class="primary" id="go" type="submit" disabled>
+        <svg class="ring" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" fill="none" stroke="url(#gTeal)" stroke-width="2.2"/><circle cx="10" cy="10" r="3.4" fill="none" stroke="#4fd1c5" stroke-width="1.8"/></svg>
+        BPA uitvoeren</button>
+      <div class="err" id="err"></div>
+    </form>
+
+    <div class="sec" id="histHead">Historiek <span class="cnt" id="histCount">0</span></div>
+    <div class="tasks" id="tasks"><div class="empty">Nog geen rapporten.</div></div>
+  </aside>
+
+  <main class="content">
+    <div class="inner">
+      <div class="topbar">
+        <div class="crumb">Best Practice Assessment<span>›</span><b id="crumbCur">Rapporten</b></div>
+        <div class="env" id="apiInfo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg><span></span></div>
+      </div>
+
+      <section id="detail">
+        <div class="hero" id="placeholder">
+          <svg viewBox="0 0 200 200">
+            <circle cx="100" cy="100" r="88" fill="none" stroke="#1d2940" stroke-width="1" stroke-dasharray="2 5"/>
+            <circle cx="100" cy="100" r="70" fill="none" stroke="url(#gTeal)" stroke-width="2" stroke-dasharray="300 140" transform="rotate(-30 100 100)" opacity=".9"/>
+            <circle cx="100" cy="100" r="54" fill="none" stroke="#a48cf0" stroke-width="1.5" stroke-dasharray="120 220" transform="rotate(150 100 100)" opacity=".8"/>
+            <g fill="#4fd1c5" opacity=".7">
+              <circle cx="100" cy="64" r="2.4"/><circle cx="125" cy="75" r="2.4"/><circle cx="136" cy="100" r="2.4"/><circle cx="125" cy="125" r="2.4"/>
+              <circle cx="100" cy="136" r="2.4"/><circle cx="75" cy="125" r="2.4"/><circle cx="64" cy="100" r="2.4"/><circle cx="75" cy="75" r="2.4"/>
+            </g>
+            <g fill="#ff6b81" opacity=".8"><circle cx="100" cy="84" r="1.8"/><circle cx="114" cy="100" r="1.8"/></g>
+            <g fill="#f5a524" opacity=".8"><circle cx="88" cy="110" r="1.8"/></g>
+            <g fill="#4c8dff" opacity=".8"><circle cx="108" cy="116" r="1.8"/><circle cx="86" cy="92" r="1.8"/></g>
+          </svg>
+          <h3>Nog geen rapport geselecteerd</h3>
+          <div>Upload een configuratie of kies een rapport uit de historiek.</div>
+        </div>
+
+        <div id="dBody" class="hidden">
+          <h1><span id="dTitle"></span>
+            <div class="actions">
+              <button class="ghost hidden" id="csv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg>CSV</button>
+              <a class="btn ghost hidden" id="dDownload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg>JSON</a>
+              <button class="ghost danger" id="dDelete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>Verwijderen</button>
+            </div>
+          </h1>
+          <div class="chips" id="dMeta"></div>
+          <div class="log" id="dLog"></div>
+
+          <div id="report" class="hidden">
+            <div class="kpis" id="stats"></div>
+            <div class="types"><h4>Adoptie per objecttype</h4><div class="tgrid" id="typeBars"></div></div>
+
+            <div class="tabs">
+              <button data-tab="checks" class="on">Per check</button>
+              <button data-tab="objects">Per object</button>
+              <button data-tab="findings">Alle resultaten</button>
+              <button data-tab="raw">Ruwe JSON</button>
+            </div>
+
+            <div class="filters" id="filters">
+              <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                <input id="q" placeholder="Zoeken…"></div>
+              <select id="fState"><option value="fail">Status = Fail</option><option value="">Alle statussen</option>
+                <option value="pass">Status = Pass</option><option value="excepted">Status = Uitgezonderd</option></select>
+              <select id="fSev"><option value="">Alle severities</option><option value="Critical">Severity = Critical</option><option value="High">Severity = High</option>
+                <option value="Warning">Severity = Warning</option><option value="Informational">Severity = Informational</option></select>
+              <select id="fType"><option value="">Alle objecttypes</option></select>
+              <span class="sp"></span><span class="count" id="count"></span>
+            </div>
+            <div id="view"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const RUNNING = ['QUEUED','AUTHENTICATING','REQUESTING','UPLOADING','PROCESSING','DOWNLOADING'];
+const STATUS_NL = {QUEUED:'In wachtrij',AUTHENTICATING:'Authenticeren',REQUESTING:'Aanvragen',UPLOADING:'Uploaden',
+  PROCESSING:'Verwerken',DOWNLOADING:'Downloaden',DONE:'Klaar',FAILED:'Mislukt'};
+const SEVS = ['Critical','High','Warning','Informational'];
+const SEV_COLOR = {Critical:'#ff4757',High:'#ff6b81',Warning:'#f5a524',Informational:'#4c8dff'};
+const ST_COLOR = {pass:'#4fd1c5', fail:'#ff5a6a', excepted:'#a48cf0'};
+const ST_NL = {pass:'Pass', fail:'Fail', excepted:'Uitgezonderd'};
+const nice = s => String(s||'').replace(/[_-]+/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+const fmtN = n => Number(n).toLocaleString('nl-BE');
+
+let settings, file = null, selected = null, pollTimer = null;
+let report = null, rows = [], tab = 'checks', openGroups = new Set();
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+  return body;
+}
+
+async function init() {
+  settings = await api('/api/settings');
+  const env = $('#apiInfo');
+  env.querySelector('span').textContent = settings.mock ? 'MOCK-modus — geen echte API-calls'
+    : 'SCM Posture API · ' + settings.api_base.replace(/^https?:\/\//, '').split('/')[0];
+  env.classList.toggle('mock', settings.mock);
+  if (settings.server_credentials) $('#credNote').textContent = 'Credentials zijn op de server ingesteld. Laat de velden leeg om die te gebruiken.';
+  else if (!settings.mock) $('#credBox').open = true;
+  try {
+    const s = JSON.parse(localStorage.getItem('bpa.prefs') || '{}');
+    if (s.tsg) { $('#tsg').value = s.tsg; $('#cid').value = s.cid || ''; $('#remember').checked = true; }
+  } catch {}
+  validate(); refresh();
+}
+
+/* ---------- Navigatie (rail) ---------- */
+$('#navNew').onclick = () => { $('.side').scrollTo({top:0, behavior:'smooth'}); $('#drop').click(); };
+$('#navHist').onclick = () => $('#histHead').scrollIntoView({behavior:'smooth'});
+$('#navCred').onclick = () => { $('#credBox').open = true; $('#credBox').scrollIntoView({behavior:'smooth'}); };
+$('#navHome').onclick = () => { selected = null; report = null; refresh(); };
+
+/* ---------- Bestand ---------- */
+const drop = $('#drop');
+drop.onclick = () => $('#file').click();
+$('#file').onchange = e => pick(e.target.files[0]);
+['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault(); drop.classList.add('over');}));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault(); drop.classList.remove('over');}));
+drop.addEventListener('drop', e => pick(e.dataTransfer.files[0]));
+
+async function pick(f) {
+  if (!f) return;
+  file = f; $('#err').textContent = '';
+  const box = $('#fileInfo'); box.style.display = 'block';
+  const sz = (f.size/1048576).toFixed(2);
+  box.innerHTML = `<b>${esc(f.name)}</b> · ${sz} MB · analyseren…`;
+  try {
+    const fd = new FormData(); fd.append('file', f);
+    const i = await api('/api/inspect', {method:'POST', body: fd});
+    box.innerHTML = `<b>${esc(f.name)}</b> · ${sz} MB<br><span class="muted">${i.type === 'panorama' ? 'Panorama' : 'Firewall'}</span>`
+      + (i.hostname ? ` · ${esc(i.hostname)}` : '') + (i.version ? ` · PAN-OS ${esc(i.version)}` : '');
+    if (!$('#label').value && i.hostname) $('#label').placeholder = i.hostname;
+  } catch (e) {
+    box.innerHTML = `<b>${esc(f.name)}</b> — <span style="color:var(--bad)">${esc(e.message)}</span>`; file = null;
+  }
+  validate();
+}
+function validate() { $('#go').disabled = !file; }
+
+$('#f').onsubmit = async e => {
+  e.preventDefault(); $('#err').textContent = ''; $('#go').disabled = true;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('label', $('#label').value.trim());
+  fd.append('delete_after_processing', $('#delAfter').checked);
+  fd.append('client_id', $('#cid').value.trim());
+  fd.append('client_secret', $('#csec').value);
+  fd.append('tsg_id', $('#tsg').value.trim());
+  try {
+    localStorage.setItem('bpa.prefs', JSON.stringify($('#remember').checked ? {tsg: $('#tsg').value, cid: $('#cid').value} : {}));
+  } catch {}
+  try {
+    const t = await api('/api/reports', {method:'POST', body: fd});
+    selected = t.id; report = null;
+    file = null; $('#file').value = ''; $('#fileInfo').style.display = 'none'; $('#label').value = '';
+    await refresh();
+  } catch (err) { $('#err').textContent = err.message; }
+  validate();
+};
+
+/* ---------- Historiek ---------- */
+async function refresh() {
+  clearTimeout(pollTimer);
+  const list = await api('/api/reports');
+  const el = $('#tasks');
+  $('#histCount').textContent = list.length;
+  el.innerHTML = list.length ? '' : '<div class="empty">Nog geen rapporten.</div>';
+  for (const t of list) {
+    const d = document.createElement('div');
+    d.className = 'task' + (t.id === selected ? ' sel' : '');
+    const cls = RUNNING.includes(t.status) ? 'run' : t.status;
+    d.innerHTML = `<div class="name"><div><b>${esc(t.label)}</b></div>
+      <div class="sub">${t.info?.type === 'panorama' ? 'Panorama' : 'Firewall'}${t.info?.version ? ' · ' + esc(t.info.version) : ''}
+      · ${new Date(t.created*1000).toLocaleString('nl-BE',{dateStyle:'short',timeStyle:'short'})}</div></div>
+      <span class="badge ${cls}"><i></i>${STATUS_NL[t.status]||t.status}</span>`;
+    d.onclick = () => { if (selected !== t.id) { selected = t.id; report = null; openGroups.clear(); } refresh(); };
+    el.appendChild(d);
+  }
+  const cur = list.find(t => t.id === selected);
+  $('#placeholder').classList.toggle('hidden', !!cur);
+  $('#dBody').classList.toggle('hidden', !cur);
+  $('#crumbCur').textContent = cur ? cur.label : 'Rapporten';
+  $('#navHome').classList.toggle('on', true);
+  if (cur) await showDetail(cur);
+  if (list.some(t => RUNNING.includes(t.status))) pollTimer = setTimeout(refresh, 1500);
+}
+
+async function showDetail(t) {
+  $('#dTitle').textContent = t.label;
+  const cls = RUNNING.includes(t.status) ? 'run' : t.status;
+  const m = [['Bestand', t.filename], ['Type', t.info?.type === 'panorama' ? 'Panorama' : 'Firewall'],
+    ['PAN-OS', t.info?.version || '—'], ['Aangemaakt', new Date(t.created*1000).toLocaleString('nl-BE',{dateStyle:'medium',timeStyle:'short'})],
+    ['Taak-ID', t.remote_id || '—']];
+  $('#dMeta').innerHTML = `<span class="badge ${cls}" style="padding:5px 11px;font-size:13px"><i></i>${STATUS_NL[t.status]||t.status}</span>`
+    + m.map(([k,v]) => `<span class="chip">${k} <b>${esc(v)}</b></span>`).join('');
+  $('#dLog').innerHTML = t.log.map(l => `<div class="${l.level}"><span class="t">${new Date(l.t*1000).toLocaleTimeString('nl-BE')}</span>${esc(l.msg)}</div>`).join('');
+  $('#dLog').scrollTop = 1e9;
+  $('#dDownload').classList.toggle('hidden', !t.has_report);
+  $('#dDownload').href = `/api/reports/${t.id}/json?download=true`;
+  $('#dDelete').onclick = async () => {
+    if (!confirm('Dit rapport verwijderen?')) return;
+    await api(`/api/reports/${t.id}`, {method:'DELETE'}); selected = null; report = null; refresh();
+  };
+  if (t.has_report && !report) {
+    report = await api(`/api/reports/${t.id}/json`);
+    rows = extractRows(report);
+    renderReport();
+  }
+  $('#report').classList.toggle('hidden', !t.has_report);
+  $('#csv').classList.toggle('hidden', !t.has_report || !rows.length);
+}
+
+/* ---------- Rapport normaliseren ---------- */
+function stateOf(w) {
+  if (w.user_excluded || w.check_excluded || /^except/i.test(w.status||'')) return 'excepted';
+  if (typeof w.check_passed === 'boolean') return w.check_passed ? 'pass' : 'fail';
+  const s = String(w.status ?? w.state ?? w.result ?? '').toLowerCase();
+  return /pass|ok|compliant/.test(s) && !/non/.test(s) ? 'pass' : /fail|non/.test(s) ? 'fail' : s || 'onbekend';
+}
+function extractRows(data) {
+  const out = [];
+  const walk = (node, typeKey, catKey) => {
+    if (Array.isArray(node)) { node.forEach(n => walk(n, typeKey, catKey)); return; }
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.warnings)) {
+      const c = node.configuration || {};
+      const objName = c.name ?? c['@name'] ?? c.uuid ?? '(object)';
+      for (const w of node.warnings) {
+        if (!w || typeof w !== 'object') continue;
+        out.push({
+          type: c.object_type || c.type || typeKey || 'overig', cat: catKey || '', object: String(objName),
+          location: c.location || c.folder || c.device_group || c.vsys || '',
+          check: w.check_name || w.name || `Check ${w.check_id ?? ''}`, check_id: w.check_id ?? '',
+          severity: SEVS.includes(w.check_type) ? w.check_type : (SEVS.includes(w.severity) ? w.severity : (w.check_type || w.severity || '')),
+          state: stateOf(w), message: w.check_message || w.message || '',
+        });
+      }
+      return;
+    }
+    if ((node.check_name || node.check_id !== undefined) && (node.status !== undefined || node.check_passed !== undefined)) {
+      out.push({type: typeKey || 'overig', cat: catKey || '', object: '', location: '', check: node.check_name || `Check ${node.check_id}`,
+        check_id: node.check_id ?? '', severity: node.check_type || node.severity || '', state: stateOf(node),
+        message: node.check_message || ''});
+      return;
+    }
+    for (const [k, v] of Object.entries(node)) {
+      if (!v || typeof v !== 'object') continue;
+      const skip = /^\d+$|^(data|result|results|report|items|best_practices)$/i.test(k);
+      const isCat = !skip && !Array.isArray(v) && Object.values(v).some(x => Array.isArray(x) || x === null);
+      walk(v, skip ? typeKey : k, isCat ? k : catKey);
+    }
+  };
+  walk(data, null, null);
+  return out;
+}
+
+/* ---------- Visuele bouwstenen ---------- */
+function donut(segs, center, sub) {
+  const r = 50, C = 2 * Math.PI * r, total = segs.reduce((a, s) => a + s.v, 0);
+  const gap = segs.filter(s => s.v > 0).length > 1 ? 4 : 0;
+  let off = 0;
+  const arcs = total ? segs.filter(s => s.v > 0).map(s => {
+    const len = Math.max(C * s.v / total - gap, 1.5);
+    const el = `<circle cx="60" cy="60" r="${r}" fill="none" stroke="${s.c}" stroke-width="9" stroke-linecap="round"
+      stroke-dasharray="${len} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 60 60)"/>`;
+    off += C * s.v / total; return el;
+  }).join('') : '';
+  return `<svg class="donut" viewBox="0 0 120 120"><circle cx="60" cy="60" r="${r}" fill="none" stroke="#1d2738" stroke-width="9"/>${arcs}
+    <text x="60" y="${sub ? 62 : 68}" text-anchor="middle" font-size="${String(center).length > 5 ? 20 : 25}" font-weight="300">${center}</text>
+    ${sub ? `<text x="60" y="80" text-anchor="middle" font-size="10" fill="#8a94a7">${sub}</text>` : ''}</svg>`;
+}
+const legendRow = (color, n, label, attr='') =>
+  `<div ${attr}><i style="background:${color}"></i><b>${typeof n === 'number' ? fmtN(n) : n}</b><span>${esc(label)}</span></div>`;
+
+const sevIcon = s => {
+  const col = SEV_COLOR[s] || '#8a94a7';
+  const two = s === 'Critical' || s === 'High';
+  return `<svg style="color:${col}"><use href="#${two ? 'i-chev2' : 'i-chev1'}"/></svg>`;
+};
+const sevBadge = s => s ? `<span class="sev">${sevIcon(s)}${esc(s)}</span>` : '';
+const stCell = s => {
+  const ic = s === 'pass' ? 'i-ok' : s === 'fail' ? 'i-x' : 'i-minus';
+  return `<span class="st st-${s}"><svg><use href="#${ic}"/></svg><span>${ST_NL[s] || esc(s)}</span></span>`;
+};
+const catClass = c => /device/i.test(c) ? 'dev' : /network/i.test(c) ? 'net' : /polic/i.test(c) ? 'pol' : 'obj';
+const typePill = r => `<span class="pill ${catClass(r.cat)}">${esc(nice(r.type))}</span>`;
+const box = (n, k) => `<span class="nbox ${n ? k : 'zero'}">${n}</span>`;
+
+/* ---------- Rapport tekenen ---------- */
+function renderReport() {
+  if (!rows.length) {
+    $('#stats').innerHTML = ''; $('#typeBars').innerHTML = '';
+    $('#stats').classList.add('hidden'); $('.types').classList.add('hidden');
+    $('#filters').classList.add('hidden');
+    setTab('raw'); return;
+  }
+  $('#stats').classList.remove('hidden'); $('.types').classList.remove('hidden');
+  $('#filters').classList.remove('hidden');
+  const c = {pass:0, fail:0, excepted:0};
+  rows.forEach(r => c[r.state] = (c[r.state]||0) + 1);
+  const evald = c.pass + c.fail;
+  const pct = evald ? Math.round(100*c.pass/evald) : 0;
+  const checks = new Set(rows.map(r => r.check)).size;
+  const failChecks = new Set(rows.filter(r => r.state === 'fail').map(r => r.check)).size;
+
+  const sev = Object.fromEntries(SEVS.map(s => [s, 0]));
+  rows.forEach(r => { if (r.state === 'fail' && r.severity in sev) sev[r.severity]++; });
+  const totalFail = Object.values(sev).reduce((a,b) => a+b, 0);
+
+  const types = {};
+  rows.forEach(r => { const t = types[r.type] ||= {pass:0, fail:0, cat:r.cat}; if (r.state in t) t[r.state]++; });
+  const cats = {};
+  rows.forEach(r => { const k = r.cat || 'overig'; const t = cats[k] ||= {pass:0, fail:0}; if (r.state in t) t[r.state]++; });
+  const catColors = {dev:'#4fd1c5', net:'#4c8dff', pol:'#a48cf0', obj:'#f5a524'};
+  const catList = Object.entries(cats).sort((a,b) => (b[1].pass+b[1].fail) - (a[1].pass+a[1].fail));
+
+  $('#stats').innerHTML = `
+    <div class="kpi"><h4>Adoptie</h4><div class="body">
+      ${donut([{v:c.pass, c:'url(#gTeal)'}, {v:c.fail, c:'transparent'}], pct + '%')}
+      <div class="legend">${legendRow('#4fd1c5', checks, 'checks')}${legendRow('#ff5a6a', failChecks, 'met fails')}</div></div></div>
+    <div class="kpi"><h4>Resultaten</h4><div class="body">
+      ${donut([{v:c.pass, c:ST_COLOR.pass}, {v:c.fail, c:ST_COLOR.fail}, {v:c.excepted, c:ST_COLOR.excepted}], fmtN(rows.length))}
+      <div class="legend">${['fail','pass','excepted'].map(s => legendRow(ST_COLOR[s], c[s], ST_NL[s], `data-state="${s}"`)).join('')}</div></div></div>
+    <div class="kpi"><h4>Fails per severity</h4><div class="body">
+      ${donut(SEVS.map(s => ({v:sev[s], c:SEV_COLOR[s]})), fmtN(totalFail))}
+      <div class="legend">${SEVS.map(s => legendRow(SEV_COLOR[s], sev[s], s, `data-sev="${s}"`)).join('')}</div></div></div>
+    <div class="kpi"><h4>Adoptie per domein</h4><div class="body">
+      ${donut(catList.map(([k,v]) => ({v:v.pass+v.fail, c:catColors[catClass(k)]})), Object.keys(types).length, 'types')}
+      <div class="legend">${catList.slice(0,4).map(([k,v]) => {
+        const t = v.pass + v.fail; return legendRow(catColors[catClass(k)], (t ? Math.round(100*v.pass/t) : 0) + '%', nice(k));
+      }).join('')}</div></div></div>`;
+  $('#stats').querySelectorAll('[data-sev]').forEach(b => b.onclick = () => { $('#fSev').value = b.dataset.sev; $('#fState').value = 'fail'; draw(); });
+  $('#stats').querySelectorAll('[data-state]').forEach(b => b.onclick = () => { $('#fState').value = b.dataset.state; draw(); });
+
+  const tl = Object.entries(types).sort((a,b) => (b[1].fail) - (a[1].fail));
+  $('#typeBars').innerHTML = tl.slice(0, 12).map(([t, v]) => {
+    const tot = v.pass + v.fail || 1;
+    return `<div class="bar" data-type="${esc(t)}" title="${v.pass} pass / ${v.fail} fail"><span class="lbl">${esc(nice(t))}</span>
+    <span class="track"><i style="width:${100*v.pass/tot}%"></i></span><span class="num">${Math.round(100*v.pass/tot)}%</span></div>`;
+  }).join('') + (tl.length > 12 ? `<div class="note">+ ${tl.length - 12} andere types (zie filter)</div>` : '');
+
+  $('#fType').innerHTML = '<option value="">Alle objecttypes</option>' +
+    Object.keys(types).sort().map(t => `<option value="${esc(t)}">Objecttype = ${esc(nice(t))}</option>`).join('');
+  document.querySelectorAll('.bar[data-type]').forEach(b => b.onclick = () => { $('#fType').value = b.dataset.type; draw(); });
+  setTab(tab === 'raw' ? 'checks' : tab);
+}
+
+function filtered() {
+  const q = $('#q').value.trim().toLowerCase(), st = $('#fState').value, sv = $('#fSev').value, ty = $('#fType').value;
+  return rows.filter(r => (!st || r.state === st) && (!sv || r.severity === sv) && (!ty || r.type === ty) &&
+    (!q || `${r.check} ${r.object} ${r.message} ${r.location} ${r.check_id}`.toLowerCase().includes(q)));
+}
+const sevRank = s => { const i = SEVS.indexOf(s); return i < 0 ? 9 : i; };
+const LIMIT = 1500;
+
+function draw() {
+  ['#fState','#fSev','#fType'].forEach(s => $(s).classList.toggle('set', !!$(s).value));
+  const v = $('#view');
+  if (tab === 'raw') { $('#count').textContent = ''; v.innerHTML = `<div class="tree">${tree(null, report, 0)}</div>`; return; }
+  const f = filtered();
+
+  if (tab === 'checks') {
+    const base = rows.filter(r => (!$('#fSev').value || r.severity === $('#fSev').value) && (!$('#fType').value || r.type === $('#fType').value));
+    const agg = new Map();
+    for (const r of base) {
+      const k = r.type + '|' + r.check;
+      const g = agg.get(k) || {key:k, check:r.check, check_id:r.check_id, type:r.type, cat:r.cat, severity:r.severity, pass:0, fail:0, excepted:0, items:[]};
+      g[r.state] = (g[r.state]||0) + 1; agg.set(k, g);
+    }
+    const fset = new Set(f);
+    for (const r of base) if (fset.has(r)) agg.get(r.type + '|' + r.check).items.push(r);
+    const groups = [...agg.values()].filter(g => g.items.length)
+      .sort((a,b) => sevRank(a.severity) - sevRank(b.severity) || b.fail - a.fail);
+    $('#count').textContent = `${fmtN(groups.length)} van ${fmtN(agg.size)} checks`;
+    v.innerHTML = `<div class="tw"><table><thead><tr><th>Severity</th><th>Check</th><th>Objecttype</th><th>Fail</th><th>Pass</th><th>Adoptie</th></tr></thead><tbody>
+      ${groups.map(g => {
+        const tot = g.pass + g.fail, pct = tot ? Math.round(100*g.pass/tot) : 0, open = openGroups.has(g.key);
+        return `<tr class="grp" data-k="${esc(g.key)}"><td>${sevBadge(g.severity)}</td><td><span class="caret">${open?'▾':'▸'}</span>${esc(g.check)}</td>
+          <td>${typePill(g)}</td><td>${box(g.fail,'f')}</td><td>${box(g.pass,'p')}</td>
+          <td class="nw"><span class="mini"><i style="width:${pct}%"></i></span>${pct}%</td></tr>` +
+          (open ? (g.items[0]?.message ? `<tr class="desc"><td colspan="6">${esc(g.items[0].message)}</td></tr>` : '')
+            + g.items.slice(0, 300).map(r => `<tr class="sub"><td></td><td colspan="5"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">${stCell(r.state)}<b style="font-weight:500">${esc(r.object)}</b>${r.location ? `<span class="muted">${esc(r.location)}</span>` : ''}</div>${r.message && r.message !== g.items[0].message ? `<div class="muted" style="margin:3px 0 0 0">${esc(r.message)}</div>` : ''}</td></tr>`).join('')
+            + (g.items.length > 300 ? `<tr class="sub"><td></td><td colspan="5" class="muted">… nog ${g.items.length-300}</td></tr>` : '') : '');
+      }).join('')}</tbody></table></div>`;
+    v.querySelectorAll('tr.grp').forEach(tr => tr.onclick = () => {
+      const k = tr.dataset.k; openGroups.has(k) ? openGroups.delete(k) : openGroups.add(k); draw(); });
+    return;
+  }
+
+  if (tab === 'objects') {
+    const agg = new Map();
+    for (const r of f) {
+      const k = r.type + '|' + r.location + '|' + r.object;
+      const g = agg.get(k) || {key:k, object:r.object, type:r.type, cat:r.cat, location:r.location, items:[], worst:9};
+      g.items.push(r); if (r.state === 'fail') g.worst = Math.min(g.worst, sevRank(r.severity)); agg.set(k, g);
+    }
+    const groups = [...agg.values()].sort((a,b) => a.worst - b.worst || b.items.length - a.items.length);
+    $('#count').textContent = `${fmtN(groups.length)} objecten`;
+    v.innerHTML = `<div class="tw"><table><thead><tr><th>Object</th><th>Objecttype</th><th>Locatie</th><th>Resultaten</th></tr></thead><tbody>
+      ${groups.slice(0, LIMIT).map(g => `<tr><td><b style="font-weight:500">${esc(g.object)}</b></td><td>${typePill(g)}</td><td class="muted">${esc(g.location)}</td>
+        <td>${g.items.sort((a,b)=>sevRank(a.severity)-sevRank(b.severity)).map(r => `<div style="display:flex;gap:12px;align-items:center;padding:2px 0">${sevIcon(r.severity).replace('<svg ','<svg width="16" height="16" ')}${stCell(r.state)}<span class="muted">${esc(r.check)}</span></div>`).join('')}</td></tr>`).join('')}
+      </tbody></table></div>${groups.length > LIMIT ? `<div class="note">Eerste ${LIMIT} getoond — verfijn de filters.</div>` : ''}`;
+    return;
+  }
+
+  const s = f.slice().sort((a,b) => sevRank(a.severity) - sevRank(b.severity));
+  $('#count').textContent = `${fmtN(f.length)} van ${fmtN(rows.length)} resultaten`;
+  v.innerHTML = `<div class="tw"><table><thead><tr><th>Severity</th><th>Status</th><th>Check</th><th>Object</th><th>Objecttype</th><th>Locatie</th><th>Melding</th></tr></thead><tbody>
+    ${s.slice(0, LIMIT).map(r => `<tr><td>${sevBadge(r.severity)}</td><td>${stCell(r.state)}</td><td>${esc(r.check)}</td>
+      <td>${esc(r.object)}</td><td>${typePill(r)}</td><td class="muted">${esc(r.location)}</td><td class="muted">${esc(r.message)}</td></tr>`).join('')}
+    </tbody></table></div>${s.length > LIMIT ? `<div class="note">Eerste ${LIMIT} getoond — verfijn de filters of exporteer naar CSV.</div>` : ''}`;
+}
+
+function setTab(t) {
+  tab = t;
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  $('#filters').classList.toggle('hidden', t === 'raw' || !rows.length);
+  draw();
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
+let deb; $('#q').oninput = () => { clearTimeout(deb); deb = setTimeout(draw, 200); };
+['#fState','#fSev','#fType'].forEach(s => $(s).onchange = draw);
+
+$('#csv').onclick = () => {
+  const cols = ['severity','state','check_id','check','type','object','location','message'];
+  const q = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
+  const csv = '﻿' + cols.join(';') + '\n' + filtered().map(r => cols.map(c => q(r[c])).join(';')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
+  a.download = `BPA_${($('#dTitle').textContent||'rapport').replace(/[^\w.-]+/g,'_')}.csv`;
+  a.click(); URL.revokeObjectURL(a.href);
+};
+
+/* ---------- Ruwe JSON-boom ---------- */
+function tree(key, val, depth) {
+  if (Array.isArray(val)) {
+    const head = `${esc(key ?? 'root')} <span class="muted">[${val.length}]</span>`;
+    const shown = val.slice(0, 200).map((v,i) => tree(`[${i}]`, v, depth+1)).join('') + (val.length > 200 ? `<div class="kv muted">… nog ${val.length-200}</div>` : '');
+    return `<details ${depth < 1 ? 'open' : ''}><summary>${head}</summary>${shown}</details>`;
+  }
+  if (val && typeof val === 'object') {
+    const ent = Object.entries(val);
+    const prim = ent.filter(([,v]) => v === null || typeof v !== 'object');
+    const obj = ent.filter(([,v]) => v !== null && typeof v === 'object');
+    const inner = (prim.length ? `<div class="kv">${prim.map(([k,v]) => `<div class="k">${esc(k)}</div><div>${esc(v)}</div>`).join('')}</div>` : '')
+      + obj.map(([k,v]) => tree(k, v, depth+1)).join('');
+    return key === null ? inner : `<details ${depth < 1 ? 'open' : ''}><summary>${esc(key)}</summary>${inner}</details>`;
+  }
+  return `<div class="kv"><div class="k">${esc(key)}</div><div>${esc(val)}</div></div>`;
+}
+
+init();
+</script>
+</body>
+</html>
