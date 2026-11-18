@@ -498,7 +498,7 @@ async function refresh() {
   const cur = list.find(t => t.id === selected);
   $('#placeholder').classList.toggle('hidden', !!cur);
   $('#dBody').classList.toggle('hidden', !cur);
-  $('#crumbCur').textContent = cur ? cur.label : 'Rapporten';
+  $('#crumbCur').textContent = cur ? cur.label : 'Reports';
   $('#navHome').classList.toggle('on', true);
   if (cur) await showDetail(cur);
   if (list.some(t => RUNNING.includes(t.status))) pollTimer = setTimeout(refresh, 1500);
@@ -534,7 +534,7 @@ function stateOf(w) {
   if (w.user_excluded || w.check_excluded || /^except/i.test(w.status||'')) return 'excepted';
   if (typeof w.check_passed === 'boolean') return w.check_passed ? 'pass' : 'fail';
   const s = String(w.status ?? w.state ?? w.result ?? '').toLowerCase();
-  return /pass|ok|compliant/.test(s) && !/non/.test(s) ? 'pass' : /fail|non/.test(s) ? 'fail' : s || 'onbekend';
+  return /pass|ok|compliant/.test(s) && !/non/.test(s) ? 'pass' : /fail|non/.test(s) ? 'fail' : s || 'unknown';
 }
 function extractRows(data) {
   const out = [];
