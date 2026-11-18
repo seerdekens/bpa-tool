@@ -1,15 +1,15 @@
 """
-PAN-OS / Panorama BPA via de Strata Cloud Manager Posture API
--------------------------------------------------------------
-Webapp die een NGFW- of Panorama-configuratie (XML) aanneemt en via de
-Posture API een Best Practice Assessment laat uitvoeren.
+PAN-OS / Panorama BPA via the Strata Cloud Manager Posture API
+---------------------------------------------------------------
+Web app that takes an NGFW or Panorama configuration (XML) and runs a
+Best Practice Assessment through the Posture API.
 
 API-flow (https://pan.dev/scm/api/config/posture-management/checks/):
   1. OAuth2 token via auth.apps.paloaltonetworks.com (client credentials + TSG ID)
   2. POST /posture/checks/v1/reports/config-file-upload  -> task_id + upload_url
   3. PUT  <upload_url>  (Content-Type: text/plain, Content-Encoding: gzip)
-  4. GET  /posture/checks/v1/reports/{task_id}/bpa-result -> pollen tot COMPLETED
-  5. GET  result.report_url (of custom_check_url)        -> JSON rapport
+  4. GET  /posture/checks/v1/reports/{task_id}/bpa-result -> poll until COMPLETED
+  5. GET  result.report_url (or custom_check_url)       -> JSON report
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # --------------------------------------------------------------------------- #
-# Configuratie
+# Configuration
 # --------------------------------------------------------------------------- #
 AUTH_URL = os.getenv(
     "PAN_AUTH_URL", "https://auth.apps.paloaltonetworks.com/oauth2/access_token"
@@ -44,11 +44,11 @@ DEFAULT_CLIENT_ID = os.getenv("PAN_CLIENT_ID", "")
 DEFAULT_CLIENT_SECRET = os.getenv("PAN_CLIENT_SECRET", "")
 DEFAULT_TSG_ID = os.getenv("PAN_TSG_ID", "")
 MOCK = os.getenv("BPA_MOCK", "0") == "1"
-UPLOAD_GZIP = os.getenv("BPA_UPLOAD_GZIP", "0") == "1"  # body echt gzippen?
-KEEP_CONFIG = os.getenv("BPA_KEEP_CONFIG", "0") == "1"  # lokale kopie bewaren?
+UPLOAD_GZIP = os.getenv("BPA_UPLOAD_GZIP", "0") == "1"  # actually gzip the body?
+KEEP_CONFIG = os.getenv("BPA_KEEP_CONFIG", "0") == "1"  # keep the local copy?
 POLL_INTERVAL = float(os.getenv("BPA_POLL_INTERVAL", "5"))
 POLL_TIMEOUT = float(os.getenv("BPA_POLL_TIMEOUT", "900"))
-QUEUE_TIMEOUT = float(os.getenv("BPA_QUEUE_TIMEOUT", "600"))  # wachten bij HTTP 429
+QUEUE_TIMEOUT = float(os.getenv("BPA_QUEUE_TIMEOUT", "600"))  # how long to wait on HTTP 429
 DATA_DIR = Path(os.getenv("BPA_DATA_DIR", "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -58,7 +58,7 @@ FAIL_STATES = {"FAILED", "ERROR", "COMPLETED_WITH_ERROR"}
 
 
 # --------------------------------------------------------------------------- #
-# Config-analyse (enkel ter info / als label)
+# Config inspection (for information / labelling only)
 # --------------------------------------------------------------------------- #
 def inspect_config(path: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"type": "firewall", "version": None, "hostname": None}
@@ -69,7 +69,7 @@ def inspect_config(path: Path) -> dict[str, Any]:
                 stack.append(elem.tag)
                 if len(stack) == 1:
                     if elem.tag != "config":
-                        raise ValueError("Root-element is geen <config>: dit is geen PAN-OS-configuratie.")
+                        raise ValueError("Root element is not <config>: this is not a PAN-OS configuration.")
                     info["version"] = elem.get("detail-version") or elem.get("version")
                 elif len(stack) == 2 and elem.tag == "panorama":
                     info["type"] = "panorama"
@@ -80,12 +80,12 @@ def inspect_config(path: Path) -> dict[str, Any]:
                 if len(stack) <= 2:
                     elem.clear()
     except ET.ParseError as exc:
-        raise ValueError(f"Ongeldige XML: {exc}") from exc
+        raise ValueError(f"Invalid XML: {exc}") from exc
     return info
 
 
 # --------------------------------------------------------------------------- #
-# API-hulpfuncties
+# API helpers
 # --------------------------------------------------------------------------- #
 _token_cache: dict[tuple[str, str], tuple[str, float]] = {}
 _token_lock = threading.Lock()
@@ -104,7 +104,7 @@ def get_token(client_id: str, client_secret: str, tsg_id: str) -> str:
             timeout=30,
         )
         if r.status_code != 200:
-            raise RuntimeError(f"Authenticatie mislukt ({r.status_code}): {_err_text(r)}")
+            raise RuntimeError(f"Authentication failed ({r.status_code}): {_err_text(r)}")
         body = r.json()
         token = body["access_token"]
         _token_cache[key] = (token, time.time() + int(body.get("expires_in", 900)))
@@ -112,7 +112,7 @@ def get_token(client_id: str, client_secret: str, tsg_id: str) -> str:
 
 
 def _err_text(r: httpx.Response) -> str:
-    """Haal een leesbare foutmelding uit een Palo Alto error-body."""
+    """Extract a readable error message from a Palo Alto error body."""
     try:
         body = r.json()
         errs = body.get("_errors") or []
@@ -135,8 +135,8 @@ def _raise_for(r: httpx.Response, what: str) -> None:
     if r.status_code >= 400:
         hint = ""
         if r.status_code in (401, 403):
-            hint = " — controleer de rol van het service account en de TSG ID."
-        raise RuntimeError(f"{what} mislukt ({r.status_code}): {_err_text(r)}{hint}")
+            hint = " — check the role of the service account and the TSG ID."
+        raise RuntimeError(f"{what} failed ({r.status_code}): {_err_text(r)}{hint}")
 
 
 def _find_status(data: dict[str, Any]) -> str:
@@ -147,7 +147,7 @@ def _find_status(data: dict[str, Any]) -> str:
 
 
 def _find_report_url(data: dict[str, Any]) -> str | None:
-    """De API zet de link niet altijd op dezelfde plek; zoek op de bekende plaatsen."""
+    """The API does not always put the link in the same place; check all known locations."""
     containers = [data.get("result") or {}, data.get("data") or {}, data]
     for c in containers:
         if not isinstance(c, dict):
@@ -166,7 +166,7 @@ def _decode_report(content: bytes) -> bytes:
 
 
 # --------------------------------------------------------------------------- #
-# Taken
+# Tasks
 # --------------------------------------------------------------------------- #
 @dataclass
 class Task:
@@ -204,15 +204,15 @@ def run_task(task: Task, cfg_path: Path, creds: dict[str, str]) -> None:
             return
 
         task.status = "AUTHENTICATING"
-        task.add("Access token ophalen…")
+        task.add("Requesting access token…")
         tok = lambda: get_token(creds["client_id"], creds["client_secret"], creds["tsg_id"])  # noqa: E731
         hdr = lambda: {"Authorization": f"Bearer {tok()}", "Accept": "application/json"}  # noqa: E731
         tok()
 
         with httpx.Client(timeout=120) as client:
-            # 1. Upload-taak aanmaken (max. 5 actieve jobs -> 429)
+            # 1. Create the upload task (max. 5 active jobs -> 429)
             task.status = "REQUESTING"
-            task.add("Upload-taak aanmaken (POST /reports/config-file-upload)…")
+            task.add("Creating upload task (POST /reports/config-file-upload)…")
             deadline = time.time() + QUEUE_TIMEOUT
             while True:
                 r = client.post(f"{API_BASE}/reports/config-file-upload", headers=hdr(),
@@ -220,30 +220,30 @@ def run_task(task: Task, cfg_path: Path, creds: dict[str, str]) -> None:
                 if r.status_code != 429:
                     break
                 if time.time() > deadline:
-                    raise RuntimeError("Limiet van 5 actieve BPA-jobs bereikt; probeer later opnieuw.")
-                task.add("Limiet van 5 actieve jobs bereikt — wachten op een vrije plaats…", "warn")
+                    raise RuntimeError("Limit of 5 active BPA jobs reached; try again later.")
+                task.add("Limit of 5 active jobs reached — waiting for a free slot…", "warn")
                 time.sleep(20)
-            _raise_for(r, "Upload-taak aanmaken")
+            _raise_for(r, "Creating upload task")
             body = r.json()
             task.remote_id = body.get("task_id") or body.get("id")
             upload_url = body.get("upload_url") or body.get("upload-url")
             if not task.remote_id or not upload_url:
                 raise RuntimeError(f"Onverwacht antwoord: {json.dumps(body)[:400]}")
-            task.add(f"Taak aangemaakt: {task.remote_id}")
+            task.add(f"Task created: {task.remote_id}")
 
-            # 2. Config uploaden naar de signed URL
+            # 2. Upload the config to the signed URL
             task.status = "UPLOADING"
             raw = cfg_path.read_bytes()
             payload = gzip.compress(raw) if UPLOAD_GZIP else raw
-            task.add(f"Configuratie uploaden ({len(raw) / 1_048_576:.1f} MB)…")
+            task.add(f"Uploading configuration ({len(raw) / 1_048_576:.1f} MB)…")
             r = client.put(upload_url, content=payload, timeout=900, headers={
                 "Content-Type": "text/plain", "Content-Encoding": "gzip"})
             _raise_for(r, "Upload")
-            task.add("Upload voltooid.")
+            task.add("Upload complete.")
             if not KEEP_CONFIG:
                 cfg_path.unlink(missing_ok=True)
 
-            # 3. Pollen
+            # 3. Poll
             task.status = "PROCESSING"
             deadline = time.time() + POLL_TIMEOUT
             last, not_found = None, 0
@@ -255,7 +255,7 @@ def run_task(task: Task, cfg_path: Path, creds: dict[str, str]) -> None:
                     not_found += 1
                     status, data = "PENDING", {}
                 else:
-                    _raise_for(r, "Status opvragen")
+                    _raise_for(r, "Status request")
                     data = r.json()
                     status = _find_status(data)
                 msg = data.get("message") if isinstance(data, dict) else None
@@ -266,32 +266,32 @@ def run_task(task: Task, cfg_path: Path, creds: dict[str, str]) -> None:
                 if status in DONE_STATES:
                     break
                 if status in FAIL_STATES:
-                    raise RuntimeError(f"BPA-verwerking mislukt: {msg or json.dumps(data)[:400]}")
+                    raise RuntimeError(f"BPA processing failed: {msg or json.dumps(data)[:400]}")
                 if status not in ACTIVE_STATES:
-                    # Geen herkenbare status: misschien zit het rapport rechtstreeks in de body
+                    # No recognisable status: the report may be in the body itself
                     if isinstance(data, dict) and data and not _find_report_url(data):
-                        task.add("Antwoord bevat geen status; inhoud wordt als rapport bewaard.", "warn")
+                        task.add("Response has no status; saving its content as the report.", "warn")
                         (DATA_DIR / f"{task.id}.report.json").write_text(json.dumps(data))
                         task.status = "DONE"
                         return
                     if _find_report_url(data):
                         break
                 if time.time() > deadline:
-                    raise RuntimeError("Time-out bij wachten op het rapport.")
+                    raise RuntimeError("Timed out waiting for the report.")
                 time.sleep(POLL_INTERVAL)
 
-            # 4. Rapport downloaden
+            # 4. Download the report
             task.status = "DOWNLOADING"
             url = _find_report_url(data)
             if not url:
-                raise RuntimeError(f"Geen download-URL in het antwoord: {json.dumps(data)[:400]}")
-            task.add("Rapport downloaden…")
+                raise RuntimeError(f"No download URL in the response: {json.dumps(data)[:400]}")
+            task.add("Downloading report…")
             r = client.get(url, timeout=600)
-            _raise_for(r, "Rapport downloaden")
+            _raise_for(r, "Report download")
             content = _decode_report(r.content)
-            json.loads(content)  # valideren
+            json.loads(content)  # validate
             (DATA_DIR / f"{task.id}.report.json").write_bytes(content)
-            task.add(f"Rapport opgeslagen ({len(content) / 1024:.0f} kB).")
+            task.add(f"Report saved ({len(content) / 1024:.0f} kB).")
 
         task.status = "DONE"
     except Exception as exc:  # noqa: BLE001
@@ -306,9 +306,9 @@ def run_task(task: Task, cfg_path: Path, creds: dict[str, str]) -> None:
 
 
 def _run_mock(task: Task) -> None:
-    for st, msg in [("AUTHENTICATING", "Access token ophalen… (mock)"),
-                    ("REQUESTING", "Upload-taak aanmaken… (mock)"),
-                    ("UPLOADING", "Configuratie uploaden… (mock)"),
+    for st, msg in [("AUTHENTICATING", "Requesting access token… (mock)"),
+                    ("REQUESTING", "Creating upload task… (mock)"),
+                    ("UPLOADING", "Uploading configuration… (mock)"),
                     ("PROCESSING", "Status: QUEUED"),
                     ("PROCESSING", "Status: IN_PROGRESS — Analyzing security rules..."),
                     ("DOWNLOADING", "Status: COMPLETED")]:
@@ -317,15 +317,15 @@ def _run_mock(task: Task) -> None:
         time.sleep(0.5)
     task.remote_id = str(uuid.uuid4())
     (DATA_DIR / f"{task.id}.report.json").write_text(json.dumps(_mock_report(), indent=1))
-    task.add("Rapport opgeslagen (mock).")
+    task.add("Report saved (mock).")
     task.status = "DONE"
 
 
 def _mock_report() -> dict[str, Any]:
-    """Fictief voorbeeldrapport in dezelfde structuur als de Posture API (best_practices → domein → objecttype)."""
+    """Fictional sample report in the same structure as the Posture API (best_practices → domain → object type)."""
     import random
     rnd = random.Random(7)
-    # domein -> objecttype -> (objectnamen, [(check, severity, uitleg)])
+    # domain -> object type -> (object names, [(check, severity, explanation)])
     spec = {
         "policies": {
             "security_rule": (
@@ -410,7 +410,7 @@ def _mock_report() -> dict[str, Any]:
                              "warnings": warns, "notes": None, "summary_remediation": {}})
             out[domain][otype] = objs
     return {"best_practices": out, "version": "1",
-            "information": {"platform": "ngfw", "PanOS_version": "11.2.0", "note": "Fictief voorbeeldrapport (mock)"}}
+            "information": {"platform": "ngfw", "PanOS_version": "11.2.0", "note": "Fictional sample report (mock)"}}
 
 
 def _save_index() -> None:
@@ -424,7 +424,7 @@ def _load_index() -> None:
     if not p.exists():
         return
     for tid, d in json.loads(p.read_text()).items():
-        legacy = d.get("meta", {})  # rapporten van de oude AIOps-versie
+        legacy = d.get("meta", {})  # reports from the old AIOps version
         label = d.get("label") or f"{legacy.get('model', '')} {legacy.get('serial', '')}".strip() or d["filename"]
         info = d.get("info") or {"type": "panorama" if legacy.get("model") == "Panorama" else "firewall",
                                  "version": legacy.get("version")}
@@ -433,14 +433,14 @@ def _load_index() -> None:
                  remote_id=d.get("remote_id"), error=d.get("error"), log=d.get("log", []),
                  created=d.get("created", 0), finished=d.get("finished"))
         if t.status not in ("DONE", "FAILED"):
-            t.status, t.error = "FAILED", "Onderbroken door herstart van de server."
+            t.status, t.error = "FAILED", "Interrupted by a server restart."
         TASKS[tid] = t
 
 
 _load_index()
 
 # --------------------------------------------------------------------------- #
-# Web-API
+# Web API
 # --------------------------------------------------------------------------- #
 app = FastAPI(title="BPA Report Generator")
 STATIC = Path(__file__).parent / "static"
@@ -488,7 +488,7 @@ async def create_report(
              "client_secret": client_secret or DEFAULT_CLIENT_SECRET,
              "tsg_id": tsg_id or DEFAULT_TSG_ID}
     if not MOCK and not all(creds.values()):
-        raise HTTPException(400, "Client ID, Client Secret en TSG ID zijn vereist.")
+        raise HTTPException(400, "Client ID, Client Secret and TSG ID are required.")
 
     tid = uuid.uuid4().hex[:12]
     cfg_path = DATA_DIR / f"{tid}.config.xml"
@@ -502,7 +502,7 @@ async def create_report(
     label = label.strip() or info.get("hostname") or (file.filename or "config")
     task = Task(id=tid, filename=file.filename or "config.xml", label=label, info=info,
                 delete_after=delete_after_processing)
-    task.add(f"Bestand ontvangen: {task.filename}")
+    task.add(f"File received: {task.filename}")
     TASKS[tid] = task
     _save_index()
     threading.Thread(target=run_task, args=(task, cfg_path, creds), daemon=True).start()
@@ -517,7 +517,7 @@ def list_reports() -> list[dict[str, Any]]:
 @app.get("/api/reports/{tid}")
 def get_report(tid: str) -> dict[str, Any]:
     if tid not in TASKS:
-        raise HTTPException(404, "Onbekende taak")
+        raise HTTPException(404, "Unknown task")
     return TASKS[tid].public()
 
 
@@ -525,7 +525,7 @@ def get_report(tid: str) -> dict[str, Any]:
 def get_report_json(tid: str, download: bool = False):
     p = DATA_DIR / f"{tid}.report.json"
     if tid not in TASKS or not p.exists():
-        raise HTTPException(404, "Rapport niet beschikbaar")
+        raise HTTPException(404, "Report not available")
     if download:
         t = TASKS[tid]
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", t.label)[:60]
