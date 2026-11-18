@@ -451,6 +451,11 @@ def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    return FileResponse(STATIC / "favicon.ico", media_type="image/x-icon")
+
+
 @app.get("/api/settings")
 def settings() -> dict[str, Any]:
     return {"mock": MOCK, "api_base": API_BASE,
