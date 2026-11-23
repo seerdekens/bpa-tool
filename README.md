@@ -127,6 +127,7 @@ All settings are environment variables, set in `.env`. Credentials entered in th
 | `401` on the token | Client ID, Client Secret or TSG ID is wrong. |
 | `403 AUTHZ_DENIED` | The token is fine, but the service account's role may not use the Posture API, or the role is on a different TSG. Restart the tool after changing a role: tokens are cached for up to 15 minutes. |
 | `429` | You have 5 active BPA jobs. The tool waits until a slot frees up. |
+| Time-out, or a report that only shows "Raw JSON" with a status message | Processing at Palo Alto Networks took longer than `BPA_POLL_TIMEOUT`. Click **Fetch result again**: the tool picks up the existing task without uploading the config again. |
 | Processing ends in `FAILED` | Check that the file is a complete config (root element `<config>`). Try `BPA_UPLOAD_GZIP=1`. |
 | No tables, only "Raw JSON" | The report has a structure the tool doesn't recognise. Please open an issue with an (anonymised) sample. |
 

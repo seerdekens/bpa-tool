@@ -22,9 +22,12 @@ The project is meant for international use: the user interface, log messages, er
    On HTTP 429 (at most 5 active jobs), the tool waits and retries.
 3. `PUT upload_url` with headers `Content-Type: text/plain` and `Content-Encoding: gzip`.
    The official docs send **raw** XML with that gzip header, and that is the default. `BPA_UPLOAD_GZIP=1` actually gzips the body.
-4. Poll `GET {API_BASE}/reports/{task_id}/bpa-result`. Statuses: 202, `QUEUED`, `IN_PROGRESS`, `COMPLETED` or `FAILED`.
+4. Poll `GET {API_BASE}/reports/{task_id}/bpa-result` (`_poll_and_download`). Documented statuses: 202, `QUEUED`, `IN_PROGRESS`, `COMPLETED` or `FAILED`.
+   The real API also returns undocumented ones, such as `UPLOAD_COMPLETE` ("waiting for BPA processing to start"). Rule: **any status that is not a failure keeps polling**; the tool only stops when the response has a report URL, contains the report itself (`best_practices`), or fails. Never treat an unknown status as a finished report.
 5. Download the report from `result.report_url`. In practice the link is sometimes in `custom_check_url`, so `_find_report_url` checks several places.
    A gzip body is detected by its magic bytes and unpacked.
+
+`POST /api/reports/{id}/resume` (button "Fetch result again") polls and downloads again for a task that already exists at Palo Alto Networks (`remote_id`), without uploading the config again. Use it after a time-out or a broken report.
 
 The documentation on pan.dev sometimes differs from what the API actually does. Be tolerant when parsing, and prefer adding fallbacks over making assumptions.
 

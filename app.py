@@ -52,7 +52,10 @@ QUEUE_TIMEOUT = float(os.getenv("BPA_QUEUE_TIMEOUT", "600"))  # how long to wait
 DATA_DIR = Path(os.getenv("BPA_DATA_DIR", "./data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-ACTIVE_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "PROCESSING", "RUNNING", "ACCEPTED"}
+# Statuses seen while the report is not ready yet. Any status that is not "done" or "failed" keeps
+# the tool polling, so new statuses (such as UPLOAD_COMPLETE, which is not in the docs) are safe.
+ACTIVE_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "PROCESSING", "RUNNING", "ACCEPTED",
+                 "UPLOAD_COMPLETE", "UPLOADED", "UPLOADING", "NOT_STARTED", "STARTED"}
 DONE_STATES = {"COMPLETED", "SUCCESS", "COMPLETED_WITH_SUCCESS"}
 FAIL_STATES = {"FAILED", "ERROR", "COMPLETED_WITH_ERROR"}
 
@@ -197,6 +200,91 @@ TASKS: dict[str, Task] = {}
 _index_lock = threading.Lock()
 
 
+def _looks_like_report(data: Any) -> bool:
+    return isinstance(data, dict) and isinstance(data.get("best_practices"), dict)
+
+
+def _poll_and_download(task: Task, client: httpx.Client, hdr: Any) -> None:
+    """Poll the BPA result until it is ready, then save the report. Raises on failure or time-out."""
+    task.status = "PROCESSING"
+    deadline = time.time() + POLL_TIMEOUT
+    last, not_found = None, 0
+    data: Any = {}
+    while True:
+        r = client.get(f"{API_BASE}/reports/{task.remote_id}/bpa-result", headers=hdr())
+        if r.status_code == 202:
+            status, data = "ACCEPTED", {}
+        elif r.status_code == 404 and not_found < 6:
+            not_found += 1
+            status, data = "PENDING", {}
+        else:
+            _raise_for(r, "Status request")
+            data = r.json()
+            status = _find_status(data) if isinstance(data, dict) else ""
+        msg = data.get("message") if isinstance(data, dict) else None
+        line = (status or "no status") + (f" — {msg}" if msg else "")
+        if line != last:
+            task.add(f"Status: {line}")
+            last = line
+
+        if status in FAIL_STATES:
+            raise RuntimeError(f"BPA processing failed: {msg or json.dumps(data)[:400]}")
+        if _looks_like_report(data):              # report returned inline
+            (DATA_DIR / f"{task.id}.report.json").write_text(json.dumps(data))
+            task.add("Report saved (returned inline).")
+            return
+        url = _find_report_url(data) if isinstance(data, dict) else None
+        if url:
+            break
+        if status in DONE_STATES:
+            raise RuntimeError(f"Status is {status}, but the response has no report or download URL: "
+                               f"{json.dumps(data)[:400]}")
+        # Anything else (known or unknown status): the report is not ready yet
+        if time.time() > deadline:
+            raise RuntimeError(f"Timed out waiting for the report (last status: {status or 'none'}). "
+                               "Use 'Fetch result again' later; the task keeps running at Palo Alto Networks.")
+        time.sleep(POLL_INTERVAL)
+
+    task.status = "DOWNLOADING"
+    task.add("Downloading report…")
+    r = client.get(url, timeout=600)
+    _raise_for(r, "Report download")
+    content = _decode_report(r.content)
+    parsed = json.loads(content)  # validate
+    if not _looks_like_report(parsed):
+        task.add("The downloaded file has an unexpected structure; it is shown as raw JSON.", "warn")
+    (DATA_DIR / f"{task.id}.report.json").write_bytes(content)
+    task.add(f"Report saved ({len(content) / 1024:.0f} kB).")
+
+
+def resume_task(task: Task, creds: dict[str, str]) -> None:
+    """Fetch the result of a task that already exists at Palo Alto Networks, without uploading again."""
+    try:
+        (DATA_DIR / f"{task.id}.report.json").unlink(missing_ok=True)
+        task.error = None
+        if MOCK:
+            task.add("Fetching the result again… (mock)")
+            (DATA_DIR / f"{task.id}.report.json").write_text(json.dumps(_mock_report(), indent=1))
+            task.add("Report saved (mock).")
+            task.status = "DONE"
+            return
+        task.status = "AUTHENTICATING"
+        task.add(f"Fetching the result of task {task.remote_id} again…")
+        tok = lambda: get_token(creds["client_id"], creds["client_secret"], creds["tsg_id"])  # noqa: E731
+        hdr = lambda: {"Authorization": f"Bearer {tok()}", "Accept": "application/json"}  # noqa: E731
+        tok()
+        with httpx.Client(timeout=120) as client:
+            _poll_and_download(task, client, hdr)
+        task.status = "DONE"
+    except Exception as exc:  # noqa: BLE001
+        task.status = "FAILED"
+        task.error = str(exc)
+        task.add(str(exc), "error")
+    finally:
+        task.finished = time.time()
+        _save_index()
+
+
 def run_task(task: Task, cfg_path: Path, creds: dict[str, str]) -> None:
     try:
         if MOCK:
@@ -243,55 +331,8 @@ def run_task(task: Task, cfg_path: Path, creds: dict[str, str]) -> None:
             if not KEEP_CONFIG:
                 cfg_path.unlink(missing_ok=True)
 
-            # 3. Poll
-            task.status = "PROCESSING"
-            deadline = time.time() + POLL_TIMEOUT
-            last, not_found = None, 0
-            while True:
-                r = client.get(f"{API_BASE}/reports/{task.remote_id}/bpa-result", headers=hdr())
-                if r.status_code == 202:
-                    status, data = "ACCEPTED", {}
-                elif r.status_code == 404 and not_found < 6:
-                    not_found += 1
-                    status, data = "PENDING", {}
-                else:
-                    _raise_for(r, "Status request")
-                    data = r.json()
-                    status = _find_status(data)
-                msg = data.get("message") if isinstance(data, dict) else None
-                line = status + (f" — {msg}" if msg else "")
-                if line != last:
-                    task.add(f"Status: {line}")
-                    last = line
-                if status in DONE_STATES:
-                    break
-                if status in FAIL_STATES:
-                    raise RuntimeError(f"BPA processing failed: {msg or json.dumps(data)[:400]}")
-                if status not in ACTIVE_STATES:
-                    # No recognisable status: the report may be in the body itself
-                    if isinstance(data, dict) and data and not _find_report_url(data):
-                        task.add("Response has no status; saving its content as the report.", "warn")
-                        (DATA_DIR / f"{task.id}.report.json").write_text(json.dumps(data))
-                        task.status = "DONE"
-                        return
-                    if _find_report_url(data):
-                        break
-                if time.time() > deadline:
-                    raise RuntimeError("Timed out waiting for the report.")
-                time.sleep(POLL_INTERVAL)
-
-            # 4. Download the report
-            task.status = "DOWNLOADING"
-            url = _find_report_url(data)
-            if not url:
-                raise RuntimeError(f"No download URL in the response: {json.dumps(data)[:400]}")
-            task.add("Downloading report…")
-            r = client.get(url, timeout=600)
-            _raise_for(r, "Report download")
-            content = _decode_report(r.content)
-            json.loads(content)  # validate
-            (DATA_DIR / f"{task.id}.report.json").write_bytes(content)
-            task.add(f"Report saved ({len(content) / 1024:.0f} kB).")
+            # 3 + 4. Poll until the report is ready, then download it
+            _poll_and_download(task, client, hdr)
 
         task.status = "DONE"
     except Exception as exc:  # noqa: BLE001
@@ -536,6 +577,31 @@ async def create_report(
     TASKS[tid] = task
     _save_index()
     threading.Thread(target=run_task, args=(task, cfg_path, creds), daemon=True).start()
+    return task.public()
+
+
+@app.post("/api/reports/{tid}/resume")
+def resume_report(
+    tid: str,
+    client_id: str = Form(""),
+    client_secret: str = Form(""),
+    tsg_id: str = Form(""),
+) -> dict[str, Any]:
+    task = TASKS.get(tid)
+    if not task:
+        raise HTTPException(404, "Unknown task")
+    if not task.remote_id:
+        raise HTTPException(400, "This task was never created at Palo Alto Networks; upload the config again.")
+    if task.status not in ("DONE", "FAILED"):
+        raise HTTPException(409, "This task is still running.")
+    creds = {"client_id": client_id or DEFAULT_CLIENT_ID,
+             "client_secret": client_secret or DEFAULT_CLIENT_SECRET,
+             "tsg_id": tsg_id or DEFAULT_TSG_ID}
+    if not MOCK and not all(creds.values()):
+        raise HTTPException(400, "Client ID, Client Secret and TSG ID are required.")
+    task.status = "QUEUED"
+    _save_index()
+    threading.Thread(target=resume_task, args=(task, creds), daemon=True).start()
     return task.public()
 
 

@@ -354,6 +354,7 @@
         <div id="dBody" class="hidden">
           <h1><span id="dTitle"></span>
             <div class="actions">
+              <button class="ghost hidden" id="resume" title="Fetch the result of this task again from Palo Alto Networks, without uploading the config again"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/></svg>Fetch result again</button>
               <button class="ghost hidden" id="csv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg>CSV</button>
               <a class="btn ghost hidden" id="dDownload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg>JSON</a>
               <button class="ghost danger" id="dDelete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>Delete</button>
@@ -546,6 +547,14 @@ async function showDetail(t) {
   $('#dLog').scrollTop = 1e9;
   $('#dDownload').classList.toggle('hidden', !t.has_report);
   $('#dDownload').href = `/api/reports/${t.id}/json?download=true`;
+  $('#resume').onclick = async () => {
+    const fd = new FormData();
+    fd.append('client_id', $('#cid').value.trim());
+    fd.append('client_secret', $('#csec').value);
+    fd.append('tsg_id', $('#tsg').value.trim());
+    try { await api(`/api/reports/${t.id}/resume`, {method:'POST', body: fd}); report = null; rows = []; refresh(); }
+    catch (err) { alert(err.message); }
+  };
   $('#dDelete').onclick = async () => {
     if (!confirm('Delete this report?')) return;
     await api(`/api/reports/${t.id}`, {method:'DELETE'}); selected = null; report = null; refresh();
@@ -557,6 +566,9 @@ async function showDetail(t) {
   }
   $('#report').classList.toggle('hidden', !t.has_report);
   $('#csv').classList.toggle('hidden', !t.has_report || !rows.length);
+  // Offer to fetch the result again when the task exists at Palo Alto but we have no usable report
+  const usable = t.status === 'DONE' && t.has_report && rows.length > 0;
+  $('#resume').classList.toggle('hidden', !t.remote_id || RUNNING.includes(t.status) || usable);
 }
 
 /* ---------- Normalise report ---------- */
