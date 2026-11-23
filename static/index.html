@@ -209,6 +209,17 @@
   .ff b{font-weight:500;color:var(--failink);word-break:break-word}
   .ff i{color:var(--muted);font-style:italic;font-weight:400}
   .resline{padding:3px 0}
+  .otype{font-size:12px;color:var(--muted)}
+  .locb{font-size:11px;border:1px solid var(--line2);border-radius:5px;padding:0 6px;color:var(--muted);white-space:nowrap}
+  .locb.builtin{border-color:var(--lav);color:var(--lav)}
+  .use{font-size:12px;color:var(--muted);margin-top:4px} .use span{color:var(--ink2)}
+  .use.none{color:var(--wrn)}
+  .ffb{flex:1 1 100%;font-size:12px;background:var(--panel2);border:1px solid var(--line2);border-left:3px solid var(--bad);border-radius:6px;padding:6px 10px}
+  .ffb .ffk{font-family:var(--mono);font-size:11.5px;color:var(--ink2);margin-bottom:3px}
+  .ffb ul{margin:0;padding-left:16px} .ffb li{padding:1px 0;color:var(--ink2)}
+  .ffb li b{font-weight:500;color:var(--failink);margin-right:8px}
+  .ffb .ak{color:var(--muted)} .ffb .sep{margin:0 7px;color:var(--dim)} .ffb .more{color:var(--muted);list-style:none}
+  .ffb i,.ff i{color:var(--muted);font-style:italic}
   .cfgbtn{font:500 11.5px var(--mono);color:var(--muted);background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:2px 8px;cursor:pointer}
   .cfgbtn:hover{color:var(--teal);border-color:var(--teal)}
   pre.cfg{font:11.5px/1.55 var(--mono);background:var(--logbg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0 2px;
@@ -541,7 +552,7 @@ async function showDetail(t) {
   };
   if (t.has_report && !report) {
     report = await api(`/api/reports/${t.id}/json`);
-    rows = extractRows(report); cfgOpen.clear();
+    rows = extractRows(report); computeUsage(rows); cfgOpen.clear();
     renderReport();
   }
   $('#report').classList.toggle('hidden', !t.has_report);
@@ -589,8 +600,11 @@ function fmtVal(v) {
   if (typeof v === 'object') { const j = JSON.stringify(v); return esc(j.length > 90 ? j.slice(0, 90) + '…' : j); }
   return esc(String(v));
 }
-const failedText = r => r.failed ? Object.entries(r.failed).map(([k, v]) =>
-  `${k} = ${v === null ? 'not set' : Array.isArray(v) ? (v.length ? v.join(', ') : 'empty') : typeof v === 'object' ? JSON.stringify(v) : v}`).join('; ') : '';
+const plainVal = v => v === null || v === undefined ? 'not set' : v === '' ? 'empty'
+  : Array.isArray(v) ? (v.length ? v.map(plainVal).join(', ') : 'empty')
+  : typeof v === 'object' ? (v.name ?? v['@name'] ? `${v.name ?? v['@name']} (${Object.entries(v).filter(([k]) => k !== 'name' && k !== '@name').map(([k, x]) => `${k}: ${plainVal(x)}`).join(', ')})`
+    : Object.entries(v).map(([k, x]) => k === x ? x : `${k}: ${plainVal(x)}`).join(', ')) : String(v);
+const failedText = r => r.failed && r.state !== 'pass' ? Object.entries(r.failed).map(([k, v]) => `${k} = ${plainVal(v)}`).join('; ') : '';
 function detailHtml(r) {
   const parts = [];
   const rulebaseFail = r.state === 'fail' && r.kind === 'rulebase' && !r.failed;
@@ -599,10 +613,91 @@ function detailHtml(r) {
       ? 'This rulebase contains no rules at all, so nothing meets this requirement.'
       : `Checked against the rulebase as a whole: none of its ${r.ruleCount} rule${r.ruleCount === 1 ? '' : 's'} meets this requirement.`}</div>`);
   } else if (r.ctx) parts.push(`<div class="ctx">${esc(r.ctx)}</div>`);
-  if (r.failed) parts.push(`<div class="ffs">${Object.entries(r.failed).map(([k, v]) =>
-    `<span class="ff" title="Setting that fails this check, with its current value"><code>${esc(k)}</code><span>=</span><b>${fmtVal(v)}</b></span>`).join('')}</div>`);
+  parts.push(usageHtml(r));
+  if (r.failed && r.state !== 'pass') parts.push(renderFailed(r.failed));
   return parts.join('');
 }
+/* Which rules use a profile: profile type -> [rule type, field on the rule] */
+const USAGE_FIELDS = {
+  anti_spyware_profile: ['security_rule', 'profile_anti_spyware'],
+  antivirus_profile: ['security_rule', 'profile_antivirus'],
+  vulnerability_protection_profile: ['security_rule', 'profile_vulnerability_protection'],
+  url_filtering_profile: ['security_rule', 'profile_url_filtering'],
+  file_blocking_profile: ['security_rule', 'profile_file_blocking'],
+  wildfire_analysis_profile: ['security_rule', 'profile_wildfire_analysis'],
+  antivirus_wildfire_analysis_profile: ['security_rule', 'profile_virus_and_wildfire_analysis'],
+  dns_security_profile: ['security_rule', 'profile_dns_security'],
+  data_filtering_profile: ['security_rule', 'profile_data_filtering'],
+  log_forwarding_profile: ['security_rule', 'log_setting'],
+  decryption_profile: ['decryption_rule', 'profile'],
+};
+function computeUsage(rows) {
+  const ruleTypes = new Set(rows.map(r => r.type));
+  const used = {}, seen = new Set();
+  for (const r of rows) {
+    if (seen.has(r.cfg)) continue; seen.add(r.cfg);
+    for (const [ptype, [rtype, field]] of Object.entries(USAGE_FIELDS)) {
+      if (r.type !== rtype || r.kind !== 'object') continue;
+      for (const n of [].concat(r.cfg[field] ?? [])) if (typeof n === 'string' && n) (used[ptype + '|' + n] ||= new Set()).add(r.object);
+    }
+  }
+  for (const r of rows) {
+    const u = USAGE_FIELDS[r.type];
+    if (!u || r.kind !== 'object' || !ruleTypes.has(u[0])) continue;   // no rules of that type in the report: unknown
+    r.usedBy = [...(used[r.type + '|' + r.object] || [])];
+    r.usedByType = u[0];
+  }
+}
+function locBadge(loc) {
+  if (!loc) return '';
+  if (loc === 'predefined') return `<span class="locb builtin" title="A predefined Palo Alto Networks object. It is read-only; a finding on it only matters if a rule uses it.">Built-in</span>`;
+  if (loc === 'shared') return `<span class="locb" title="Defined in the shared location (for a Panorama-managed firewall: pushed by Panorama)">Shared</span>`;
+  return `<span class="locb" title="Location">${esc(loc)}</span>`;
+}
+function usageHtml(r) {
+  if (!r.usedBy) return '';
+  const what = r.usedByType === 'decryption_rule' ? 'decryption rule' : 'security rule';
+  if (!r.usedBy.length) return `<div class="use none">Not used by any ${what}${r.location === 'predefined' ? ' — no effect on traffic right now' : ''}</div>`;
+  const list = r.usedBy.slice(0, 6).map(esc).join(', ') + (r.usedBy.length > 6 ? ` +${r.usedBy.length - 6} more` : '');
+  return `<div class="use">Used by ${r.usedBy.length} ${what}${r.usedBy.length === 1 ? '' : 's'}: <span>${list}</span></div>`;
+}
+function fmtFlat(v) {
+  if (v === null || v === undefined) return '<i>not set</i>';
+  if (v === '') return '<i>empty</i>';
+  if (Array.isArray(v)) return v.length ? esc(v.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x)).join(', ')) : '<i>empty</i>';
+  if (typeof v === 'object') {
+    const e = Object.entries(v);
+    if (!e.length) return '<i>empty</i>';
+    if (e.length === 1 && (e[0][0] === e[0][1] || typeof e[0][1] !== 'object')) return esc(String(e[0][1] === e[0][0] ? e[0][1] : `${e[0][0]}: ${e[0][1]}`));
+    const j = e.map(([k, x]) => `${k}: ${typeof x === 'object' ? JSON.stringify(x) : x}`).join(', ');
+    return esc(j.length > 120 ? j.slice(0, 120) + '…' : j);
+  }
+  return esc(String(v));
+}
+function itemLine(it) {
+  if (!it || typeof it !== 'object' || Array.isArray(it)) return fmtFlat(it);
+  const nm = it.name ?? it['@name'];
+  const attrs = Object.entries(it).filter(([k]) => k !== 'name' && k !== '@name')
+    .map(([k, v]) => `<span class="ak">${esc(k)}</span> ${fmtFlat(v)}`).join('<span class="sep">·</span>');
+  return (nm != null ? `<b>${esc(nm)}</b>` : '') + attrs;
+}
+function renderFailed(f) {
+  return `<div class="ffs">` + Object.entries(f).map(([k, v]) => {
+    const path = esc(k).replace(/\./g, ' › ');
+    const objList = Array.isArray(v) && v.length && v.every(x => x && typeof x === 'object');
+    if (objList || (v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).some(x => x && typeof x === 'object'))) {
+      const items = objList ? v : [v];
+      return `<div class="ffb" title="Setting that fails this check, with its current value"><div class="ffk">${path}</div><ul>${
+        items.slice(0, 12).map(it => `<li>${itemLine(it)}</li>`).join('')}${items.length > 12 ? `<li class="more">+${items.length - 12} more</li>` : ''}</ul></div>`;
+    }
+    return `<span class="ff" title="Setting that fails this check, with its current value"><code>${path}</code><span>=</span><b>${fmtFlat(v)}</b></span>`;
+  }).join('') + `</div>`;
+}
+function objHeader(r) {
+  if (r.kind !== 'object') return `<b style="font-weight:500">${esc(r.object)}</b>`;
+  return `<span class="otype">${esc(nice(r.type))}</span><b style="font-weight:500">${esc(r.object)}</b>${locBadge(r.location)}`;
+}
+
 const cfgOpen = new Set();
 function cfgButton(r) {
   const i = r.idx;
@@ -778,6 +873,10 @@ function draw() {
     }
     const fset = new Set(f);
     for (const r of base) if (fset.has(r)) agg.get(r.type + '|' + r.check).items.push(r);
+    // Within a check: failures first, then objects that rules actually use, unused built-in objects last
+    const impact = r => (r.state === 'fail' ? 0 : r.state === 'excepted' ? 2000 : 4000)
+      + (r.usedBy ? (r.usedBy.length ? -r.usedBy.length : (r.location === 'predefined' ? 1000 : 500)) : 0);
+    for (const g of agg.values()) g.items.sort((a, b) => impact(a) - impact(b));
     const groups = [...agg.values()].filter(g => g.items.length)
       .sort((a,b) => sevRank(a.severity) - sevRank(b.severity) || b.fail - a.fail);
     $('#count').textContent = `${fmtN(groups.length)} of ${fmtN(agg.size)} checks`;
@@ -788,7 +887,7 @@ function draw() {
           <td>${typePill(g)}</td><td>${box(g.fail,'f')}</td><td>${box(g.pass,'p')}</td>
           <td class="nw"><span class="mini"><i style="width:${pct}%"></i></span>${pct}%</td></tr>` +
           (open ? (g.items[0]?.message ? `<tr class="desc"><td colspan="6">${esc(g.items[0].message)}</td></tr>` : '')
-            + g.items.slice(0, 300).map(r => `<tr class="sub"><td></td><td colspan="5"><div class="objline">${stCell(r.state)}<b style="font-weight:500">${esc(r.object)}</b>${r.location && r.kind === 'object' ? `<span class="muted">${esc(r.location)}</span>` : ''}<span class="sp"></span>${cfgButton(r)}</div>${detailHtml(r)}${r.message && r.message !== g.items[0].message ? `<div class="muted" style="margin:3px 0 0 0">${esc(r.message)}</div>` : ''}${cfgBlock(r)}</td></tr>`).join('')
+            + g.items.slice(0, 300).map(r => `<tr class="sub"><td></td><td colspan="5"><div class="objline">${stCell(r.state)}${objHeader(r)}<span class="sp"></span>${cfgButton(r)}</div>${detailHtml(r)}${r.message && r.message !== g.items[0].message ? `<div class="muted" style="margin:3px 0 0 0">${esc(r.message)}</div>` : ''}${cfgBlock(r)}</td></tr>`).join('')
             + (g.items.length > 300 ? `<tr class="sub"><td></td><td colspan="5" class="muted">… and ${g.items.length-300} more</td></tr>` : '') : '');
       }).join('')}</tbody></table></div>`;
     v.querySelectorAll('tr.grp').forEach(tr => tr.onclick = () => {
@@ -807,8 +906,8 @@ function draw() {
     const groups = [...agg.values()].sort((a,b) => a.worst - b.worst || b.items.length - a.items.length);
     $('#count').textContent = `${fmtN(groups.length)} objects`;
     v.innerHTML = `<div class="tw"><table><thead><tr><th>Object</th><th>Object type</th><th>Location</th><th>Results</th></tr></thead><tbody>
-      ${groups.slice(0, LIMIT).map(g => `<tr><td><b style="font-weight:500">${esc(g.object)}</b>${g.ctx ? `<div class="ctx">${esc(g.ctx)}</div>` : ''}<div style="margin-top:6px">${cfgButton(g.first)}</div>${cfgBlock(g.first)}</td><td>${typePill(g)}</td><td class="muted">${esc(g.location)}</td>
-        <td>${g.items.sort((a,b)=>sevRank(a.severity)-sevRank(b.severity)).map(r => `<div class="resline"><div style="display:flex;gap:12px;align-items:center">${sevIcon(r.severity).replace('<svg ','<svg width="16" height="16" ')}${stCell(r.state)}<span class="muted">${esc(r.check)}</span></div>${r.state === 'fail' && r.failed ? `<div class="ffs" style="margin-left:28px">${Object.entries(r.failed).map(([k, v]) => `<span class="ff"><code>${esc(k)}</code><span>=</span><b>${fmtVal(v)}</b></span>`).join('')}</div>` : ''}</div>`).join('')}</td></tr>`).join('')}
+      ${groups.slice(0, LIMIT).map(g => `<tr><td><b style="font-weight:500">${esc(g.object)}</b> ${g.kind === 'object' ? locBadge(g.location) : ''}${g.ctx ? `<div class="ctx">${esc(g.ctx)}</div>` : ''}${usageHtml(g.first)}<div style="margin-top:6px">${cfgButton(g.first)}</div>${cfgBlock(g.first)}</td><td>${typePill(g)}</td><td class="muted">${esc(g.location)}</td>
+        <td>${g.items.sort((a,b)=>sevRank(a.severity)-sevRank(b.severity)).map(r => `<div class="resline"><div style="display:flex;gap:12px;align-items:center">${sevIcon(r.severity).replace('<svg ','<svg width="16" height="16" ')}${stCell(r.state)}<span class="muted">${esc(r.check)}</span></div>${r.state === 'fail' && r.failed ? `<div style="margin-left:28px">${renderFailed(r.failed)}</div>` : ''}</div>`).join('')}</td></tr>`).join('')}
       </tbody></table></div>${groups.length > LIMIT ? `<div class="note">Showing the first ${LIMIT} — refine the filters.</div>` : ''}`;
     wireCfgButtons(v);
     return;
@@ -818,7 +917,7 @@ function draw() {
   $('#count').textContent = `${fmtN(f.length)} of ${fmtN(rows.length)} results`;
   v.innerHTML = `<div class="tw"><table><thead><tr><th>Severity</th><th>Status</th><th>Check</th><th>Object</th><th>Object type</th><th>Location</th><th>Failing setting / message</th></tr></thead><tbody>
     ${s.slice(0, LIMIT).map(r => `<tr><td>${sevBadge(r.severity)}</td><td>${stCell(r.state)}</td><td>${esc(r.check)}</td>
-      <td>${esc(r.object)}${r.ctx ? `<div class="ctx">${esc(r.ctx)}</div>` : ''}<div style="margin-top:6px">${cfgButton(r)}</div></td><td>${typePill(r)}</td><td class="muted">${esc(r.location)}</td>
+      <td>${esc(r.object)} ${r.kind === 'object' ? locBadge(r.location) : ''}${r.ctx ? `<div class="ctx">${esc(r.ctx)}</div>` : ''}<div style="margin-top:6px">${cfgButton(r)}</div></td><td>${typePill(r)}</td><td class="muted">${esc(r.location)}</td>
       <td>${detailHtml({...r, ctx: ''})}<div class="muted">${esc(r.message)}</div>${cfgBlock(r)}</td></tr>`).join('')}
     </tbody></table></div>${s.length > LIMIT ? `<div class="note">Showing the first ${LIMIT} — refine the filters or export to CSV.</div>` : ''}`;
   wireCfgButtons(v);
@@ -835,9 +934,9 @@ let deb; $('#q').oninput = () => { clearTimeout(deb); deb = setTimeout(draw, 200
 ['#fState','#fSev','#fType'].forEach(s => $(s).onchange = draw);
 
 $('#csv').onclick = () => {
-  const cols = ['severity','state','check_id','check','type','object','context','location','failed_settings','message'];
+  const cols = ['severity','state','check_id','check','type','object','context','location','used_by','failed_settings','message'];
   const q = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
-  const csv = '﻿' + cols.join(';') + '\n' + filtered().map(r => cols.map(c => q(c === 'failed_settings' ? failedText(r) : c === 'context' ? r.ctx : r[c])).join(';')).join('\n');
+  const csv = '﻿' + cols.join(';') + '\n' + filtered().map(r => cols.map(c => q(c === 'failed_settings' ? failedText(r) : c === 'context' ? r.ctx : c === 'used_by' ? (r.usedBy ? (r.usedBy.length ? r.usedBy.join(', ') : 'not used') : '') : r[c])).join(';')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
   a.download = `BPA_${($('#dTitle').textContent||'report').replace(/[^\w.-]+/g,'_')}.csv`;

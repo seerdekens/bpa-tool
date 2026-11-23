@@ -354,7 +354,9 @@ def _mock_report() -> dict[str, Any]:
                 ["default", "strict-AS"],
                 [("Enable DNS sinkhole in the anti-spyware profile.", "Critical",
                   "Sinkholing identifies infected hosts that resolve malicious domains.",
-                  {"botnet_domains.lists.default-paloalto-dns.action": "alert"}),
+                  {"botnet_domains.dns_security_categories": [
+                      {"name": "pan-dns-sec-cc", "action": "default", "log_level": "default", "packet_capture": "disable"},
+                      {"name": "pan-dns-sec-malware", "action": "alert", "log_level": "default", "packet_capture": "disable"}]}),
                  ("Block critical, high and medium severity spyware.", "High",
                   "Command-and-control traffic should be blocked, not only alerted.")]),
             "url_filtering_profile": (
@@ -410,7 +412,9 @@ def _mock_report() -> dict[str, Any]:
                                   "check_message": msg, "check_passed": passed, "check_excluded": excl,
                                   "failed_fields": None if passed else failed,
                                   "defined_by": "Predefined", "severity": ""})
-                cfg: dict[str, Any] = {"uuid": str(uuid.UUID(int=rnd.getrandbits(128))), "location": "vsys1"}
+                builtin = otype.endswith("_profile") and n == "default"
+                cfg: dict[str, Any] = {"uuid": str(uuid.UUID(int=rnd.getrandbits(128))),
+                                       "location": "predefined" if builtin else "vsys1"}
                 if n is None and otype.endswith("_rulebase"):
                     cfg[otype.replace("_rulebase", "_rules")] = [{"name": x} for x in spec["policies"]["security_rule"][0]]
                 elif n is not None:
@@ -420,7 +424,9 @@ def _mock_report() -> dict[str, Any]:
                     src, dst = rnd.choice(zones)
                     cfg.update({"from": [src], "to": [dst], "action": "allow",
                                 "application": rnd.choice([["web-browsing", "ssl"], ["any"], ["dns"], ["ms-rdp"]]),
-                                "service": ["application-default"]})
+                                "service": ["application-default"],
+                                "profile_anti_spyware": rnd.choice(["strict-AS", "strict-AS", None]),
+                                "profile_url_filtering": rnd.choice(["corp-url", None])})
                 # keep the fictional config consistent with the settings reported as failing
                 for w in warns:
                     for k, v in (w["failed_fields"] or {}).items():

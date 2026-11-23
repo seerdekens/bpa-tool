@@ -45,7 +45,9 @@ What a result refers to (`describeObject()`):
 - **`rulebase`**: the configuration has no name but a `*_rules` list (`security_rules`, `decryption_rules`…). The check applies to the rulebase as a whole (for example "there must be a rule that blocks QUIC"), so there is no single rule to point at. One rulebase per location: `vsys1`, `shared`, `predefined` or an empty location.
 - **`settings`**: a group of device settings without a name (`device_setup_*`, `log_settings_*`, `dynamic_updates`, `user_id`).
 
-`failed_fields` (a dict, or `null`) holds the exact settings that fail the check and their current value, for example `{"service": ["any"]}` or `{"permitted_ip": []}`. Keys can be dotted paths. This is the most useful information for the user: always show it next to a failing result.
+Profiles are linked to the rules that use them (`computeUsage()` and `USAGE_FIELDS`): security rules reference profiles by name in `profile_anti_spyware`, `profile_url_filtering`, `log_setting` and so on (profile groups are already resolved into these fields); decryption rules use `profile`. A result on a profile gets `usedBy` (rule names). Objects in location `predefined` are Palo Alto's read-only built-in objects: a finding on one only matters if a rule uses it, so show that clearly and sort such results last.
+
+`failed_fields` (a dict, or `null`) holds the exact settings that fail the check and their current value, for example `{"service": ["any"]}` or `{"permitted_ip": []}`. Keys can be dotted paths. Values are often lists of named entries (for example DNS security categories with their action); `renderFailed()` shows those per entry by name instead of as JSON. This is the most useful information for the user: always show it next to a failing result.
 
 Don't use the configuration field `type` as the object type: on some objects it is a setting (for example the management interface). The grouping key in the report is the object type.
 
