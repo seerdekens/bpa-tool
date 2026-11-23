@@ -332,17 +332,18 @@ def _mock_report() -> dict[str, Any]:
                 ["allow-web", "allow-dns", "any-any-temp", "dmz-to-lan", "vpn-users", "guest-internet",
                  "mgmt-access", "backup-srv", "iot-cloud", "partner-api"],
                 [("Allow rules should specify applications (App-ID).", "Critical",
-                  "Rules based on ports instead of App-ID allow any application on that port."),
+                  "Rules based on ports instead of App-ID allow any application on that port.", {"application": ["any"]}),
                  ("Allow rules should have a security profile group attached.", "Critical",
-                  "Without threat profiles, allowed traffic is not inspected for exploits or malware."),
+                  "Without threat profiles, allowed traffic is not inspected for exploits or malware.",
+                  {"profile_setting.group": None}),
                  ("Service should not be 'any' in allow rules.", "High",
-                  "Restrict allowed services to the application defaults or explicit ports."),
+                  "Restrict allowed services to the application defaults or explicit ports.", {"service": ["any"]}),
                  ("Log at session end should be enabled.", "Warning",
-                  "Session-end logging provides visibility for investigation and reporting."),
+                  "Session-end logging provides visibility for investigation and reporting.", {"log_end": "no"}),
                  ("Security rules should have a description.", "Informational",
                   "Descriptions help reviewers understand why a rule exists.")]),
             "security_rulebase": (
-                ["rulebase"],
+                [None],
                 [("Block inbound traffic from known malicious IP addresses.", "High",
                   "Use external dynamic lists with known malicious IP addresses."),
                  ("Enable logging on the interzone-default rule.", "Informational",
@@ -352,7 +353,8 @@ def _mock_report() -> dict[str, Any]:
             "anti_spyware_profile": (
                 ["default", "strict-AS"],
                 [("Enable DNS sinkhole in the anti-spyware profile.", "Critical",
-                  "Sinkholing identifies infected hosts that resolve malicious domains."),
+                  "Sinkholing identifies infected hosts that resolve malicious domains.",
+                  {"botnet_domains.lists.default-paloalto-dns.action": "alert"}),
                  ("Block critical, high and medium severity spyware.", "High",
                   "Command-and-control traffic should be blocked, not only alerted.")]),
             "url_filtering_profile": (
@@ -366,7 +368,7 @@ def _mock_report() -> dict[str, Any]:
             "zone_protection_profile": (
                 ["zp-untrust"],
                 [("Enable reconnaissance protection.", "Warning",
-                  "Detects and blocks port scans and host sweeps."),
+                  "Detects and blocks port scans and host sweeps.", {"scan.8001.action": None}),
                  ("Enable packet-based attack protection.", "Warning",
                   "Drops malformed and spoofed packets.")]),
             "interface_management_profile": (
@@ -376,15 +378,15 @@ def _mock_report() -> dict[str, Any]:
         },
         "device": {
             "device_setup_management": (
-                ["fw-demo-01"],
+                [None],
                 [("Restrict management access to permitted IP addresses.", "Critical",
-                  "Management access should only be possible from trusted networks."),
+                  "Management access should only be possible from trusted networks.", {"permitted_ip": []}),
                  ("Enable minimum password complexity.", "High",
-                  "Enforce strong passwords for local administrators."),
+                  "Enforce strong passwords for local administrators.", {"enabled": "no", "minimum_length": 0}),
                  ("Configure an NTP server.", "Warning",
-                  "Accurate time is required for log correlation.")]),
+                  "Accurate time is required for log correlation.", {"ntp_servers": None})]),
             "dynamic_updates": (
-                ["updates"],
+                [None],
                 [("Schedule antivirus updates hourly.", "Warning",
                   "Frequent updates shorten the window of exposure.")]),
         },
@@ -399,15 +401,32 @@ def _mock_report() -> dict[str, Any]:
             objs = []
             for n in names:
                 warns = []
-                for check_id, (cn, sev, msg) in zip(ids, checks):
+                for check_id, chk in zip(ids, checks):
+                    cn, sev, msg = chk[:3]
+                    failed = chk[3] if len(chk) > 3 else None
                     passed = rnd.random() > 0.38
                     excl = not passed and rnd.random() < 0.12
                     warns.append({"check_id": check_id, "check_name": cn, "check_type": sev,
                                   "check_message": msg, "check_passed": passed, "check_excluded": excl,
+                                  "failed_fields": None if passed else failed,
                                   "defined_by": "Predefined", "severity": ""})
-                objs.append({"configuration": {"uuid": str(uuid.UUID(int=rnd.getrandbits(128))),
-                                               "name": n, "location": "vsys1"},
-                             "warnings": warns, "notes": None, "summary_remediation": {}})
+                cfg: dict[str, Any] = {"uuid": str(uuid.UUID(int=rnd.getrandbits(128))), "location": "vsys1"}
+                if n is None and otype.endswith("_rulebase"):
+                    cfg[otype.replace("_rulebase", "_rules")] = [{"name": x} for x in spec["policies"]["security_rule"][0]]
+                elif n is not None:
+                    cfg["name"] = n
+                if otype == "security_rule":
+                    zones = [("trust", "untrust"), ("dmz", "trust"), ("guest", "untrust"), ("untrust", "dmz")]
+                    src, dst = rnd.choice(zones)
+                    cfg.update({"from": [src], "to": [dst], "action": "allow",
+                                "application": rnd.choice([["web-browsing", "ssl"], ["any"], ["dns"], ["ms-rdp"]]),
+                                "service": ["application-default"]})
+                # keep the fictional config consistent with the settings reported as failing
+                for w in warns:
+                    for k, v in (w["failed_fields"] or {}).items():
+                        if "." not in k:
+                            cfg[k] = v
+                objs.append({"configuration": cfg, "warnings": warns, "notes": None, "summary_remediation": {}})
             out[domain][otype] = objs
     return {"best_practices": out, "version": "1",
             "information": {"platform": "ngfw", "PanOS_version": "11.2.0", "note": "Fictional sample report (mock)"}}

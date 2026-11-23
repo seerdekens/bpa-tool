@@ -36,8 +36,18 @@ warning = { check_id, check_name, check_type (Critical|High|Warning|Informationa
             check_passed, check_excluded, remediation, failed_fields, defined_by, severity }
 ```
 
-`extractRows()` in the frontend flattens this into rows: `{type, cat, object, location, check, check_id, severity, state, message}`.
+`extractRows()` in the frontend flattens this into rows: `{type, cat, object, kind, ctx, ruleCount, location, check, check_id, severity, state, message, failed, cfg, idx}`.
 `state` is `pass`, `fail` or `excepted`. The function is deliberately generic. Unknown structures fall back to the "Raw JSON" tab.
+
+What a result refers to (`describeObject()`):
+
+- **`object`**: a named object (security rule, profile, zone…). `configuration.name` is the name; rules get context from `from`/`to`/`action`/`application`.
+- **`rulebase`**: the configuration has no name but a `*_rules` list (`security_rules`, `decryption_rules`…). The check applies to the rulebase as a whole (for example "there must be a rule that blocks QUIC"), so there is no single rule to point at. One rulebase per location: `vsys1`, `shared`, `predefined` or an empty location.
+- **`settings`**: a group of device settings without a name (`device_setup_*`, `log_settings_*`, `dynamic_updates`, `user_id`).
+
+`failed_fields` (a dict, or `null`) holds the exact settings that fail the check and their current value, for example `{"service": ["any"]}` or `{"permitted_ip": []}`. Keys can be dotted paths. This is the most useful information for the user: always show it next to a failing result.
+
+Don't use the configuration field `type` as the object type: on some objects it is a setting (for example the management interface). The grouping key in the report is the object type.
 
 ## Developing and testing locally
 
@@ -46,7 +56,7 @@ pip install -r requirements.txt
 BPA_MOCK=1 uvicorn app:app --reload --port 8000     # fictional report, no credentials needed
 ```
 
-- **Mock mode:** `_mock_report()` generates a fictional report in the same structure as the real API. **Never** use real customer reports or configs as test data or in screenshots: they contain rule names, object names and network details.
+- **Mock mode:** `_mock_report()` generates a fictional report in the same structure as the real API, including rulebases, rule context and `failed_fields`, with the config kept consistent with the failing settings. **Never** use real customer reports or configs as test data or in screenshots: they contain rule names, object names and network details.
 - **Testing the real API path without credentials:** run a fake server with FastAPI and point `PAN_AUTH_URL` and `PAN_API_BASE` at it. This lets you test 202, 404, 429, `custom_check_url` and gzip reports too.
 - **Checking the UI:** test at 1280, 1440 and 1920 px. Below 1520 px the layout switches to a more compact table.
 

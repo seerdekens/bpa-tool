@@ -198,6 +198,21 @@
   tr.sub td{background:var(--subrow);font-size:12.5px;padding:8px 14px}
   tr.sub:hover td{background:var(--subhover)}
   .caret{display:inline-block;width:14px;color:var(--muted)}
+  .objline{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .objline .sp{flex:1}
+  .ctx{font-size:12px;color:var(--muted);margin-top:3px}
+  .ffs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .ff{display:inline-flex;align-items:baseline;gap:6px;font-size:12px;background:var(--panel2);border:1px solid var(--line2);border-left:3px solid var(--bad);
+    border-radius:6px;padding:2px 9px;max-width:100%}
+  .ff code{font-family:var(--mono);font-size:11.5px;color:var(--ink2)}
+  .ff span{color:var(--dim)}
+  .ff b{font-weight:500;color:var(--failink);word-break:break-word}
+  .ff i{color:var(--muted);font-style:italic;font-weight:400}
+  .resline{padding:3px 0}
+  .cfgbtn{font:500 11.5px var(--mono);color:var(--muted);background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:2px 8px;cursor:pointer}
+  .cfgbtn:hover{color:var(--teal);border-color:var(--teal)}
+  pre.cfg{font:11.5px/1.55 var(--mono);background:var(--logbg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0 2px;
+    max-height:340px;overflow:auto;color:var(--ink2);white-space:pre}
   tr.desc td{background:var(--subrow);color:var(--muted);font-size:12.5px;padding:10px 14px 12px;border-left:2px solid var(--teal)}
 
   .sev{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
@@ -526,7 +541,7 @@ async function showDetail(t) {
   };
   if (t.has_report && !report) {
     report = await api(`/api/reports/${t.id}/json`);
-    rows = extractRows(report);
+    rows = extractRows(report); cfgOpen.clear();
     renderReport();
   }
   $('#report').classList.toggle('hidden', !t.has_report);
@@ -540,6 +555,72 @@ function stateOf(w) {
   const s = String(w.status ?? w.state ?? w.result ?? '').toLowerCase();
   return /pass|ok|compliant/.test(s) && !/non/.test(s) ? 'pass' : /fail|non/.test(s) ? 'fail' : s || 'unknown';
 }
+/* Work out what a result refers to: a named object, a whole rulebase, or a group of device settings */
+function describeObject(c, type) {
+  const list = v => Array.isArray(v) ? v : (v == null || v === '' ? [] : [v]);
+  const short = v => { const a = list(v).map(x => typeof x === 'object' ? (x?.name ?? JSON.stringify(x)) : String(x));
+    return a.length > 3 ? a.slice(0, 3).join(', ') + ` +${a.length - 3}` : a.join(', '); };
+  const name = [c.name, c['@name'], c.entry_name].find(v => typeof v === 'string' || typeof v === 'number');
+  if (name != null && name !== '') {
+    const ctx = [];
+    if (c.from !== undefined || c.to !== undefined) ctx.push(`${short(c.from) || 'any'} → ${short(c.to) || 'any'}`);
+    if (c.action) ctx.push(String(c.action));
+    const apps = c.application ?? c.applications;
+    if (apps !== undefined && short(apps)) ctx.push('app: ' + short(apps));
+    if (c.disabled === true || c.disabled === 'yes') ctx.push('disabled');
+    return {name: String(name), kind: 'object', ctx: ctx.join(' · ')};
+  }
+  const ruleKey = Object.keys(c).find(k => /_rules$/.test(k) && Array.isArray(c[k]));
+  if (ruleKey) {
+    const n = c[ruleKey].length;
+    return {name: `${nice(type)} · ${c.location || 'no location'}`, kind: 'rulebase', ruleCount: n,
+            ctx: `${n} rule${n === 1 ? '' : 's'} in this rulebase`};
+  }
+  return {name: nice(type), kind: 'settings', ctx: c.location ? `location: ${c.location}` : ''};
+}
+function fmtVal(v) {
+  if (v === null || v === undefined) return '<i>not set</i>';
+  if (v === '') return '<i>empty</i>';
+  if (Array.isArray(v)) {
+    if (!v.length) return '<i>empty</i>';
+    const a = v.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x));
+    return esc(a.slice(0, 6).join(', ') + (a.length > 6 ? ` +${a.length - 6} more` : ''));
+  }
+  if (typeof v === 'object') { const j = JSON.stringify(v); return esc(j.length > 90 ? j.slice(0, 90) + '…' : j); }
+  return esc(String(v));
+}
+const failedText = r => r.failed ? Object.entries(r.failed).map(([k, v]) =>
+  `${k} = ${v === null ? 'not set' : Array.isArray(v) ? (v.length ? v.join(', ') : 'empty') : typeof v === 'object' ? JSON.stringify(v) : v}`).join('; ') : '';
+function detailHtml(r) {
+  const parts = [];
+  const rulebaseFail = r.state === 'fail' && r.kind === 'rulebase' && !r.failed;
+  if (rulebaseFail) {
+    parts.push(`<div class="ctx">${r.ruleCount === 0
+      ? 'This rulebase contains no rules at all, so nothing meets this requirement.'
+      : `Checked against the rulebase as a whole: none of its ${r.ruleCount} rule${r.ruleCount === 1 ? '' : 's'} meets this requirement.`}</div>`);
+  } else if (r.ctx) parts.push(`<div class="ctx">${esc(r.ctx)}</div>`);
+  if (r.failed) parts.push(`<div class="ffs">${Object.entries(r.failed).map(([k, v]) =>
+    `<span class="ff" title="Setting that fails this check, with its current value"><code>${esc(k)}</code><span>=</span><b>${fmtVal(v)}</b></span>`).join('')}</div>`);
+  return parts.join('');
+}
+const cfgOpen = new Set();
+function cfgButton(r) {
+  const i = r.idx;
+  return `<button class="cfgbtn" data-cfg="${i}" title="Show the configuration of this object">{ } Config</button>`;
+}
+function cfgBlock(r) {
+  if (!cfgOpen.has(r.idx)) return '';
+  let j = JSON.stringify(r.cfg, null, 2);
+  if (j.length > 30000) j = j.slice(0, 30000) + '\n… (truncated)';
+  return `<pre class="cfg">${esc(j)}</pre>`;
+}
+function wireCfgButtons(root) {
+  root.querySelectorAll('[data-cfg]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const i = +b.dataset.cfg; cfgOpen.has(i) ? cfgOpen.delete(i) : cfgOpen.add(i); draw();
+  });
+}
+
 function extractRows(data) {
   const out = [];
   const walk = (node, typeKey, catKey) => {
@@ -547,15 +628,19 @@ function extractRows(data) {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node.warnings)) {
       const c = node.configuration || {};
-      const objName = c.name ?? c['@name'] ?? c.uuid ?? '(object)';
+      // The report's own grouping key is the object type; config fields such as `type` mean something else
+      const t = typeKey || (typeof c.object_type === 'string' && c.object_type) || 'other';
+      const info = describeObject(c, t);
       for (const w of node.warnings) {
         if (!w || typeof w !== 'object') continue;
         out.push({
-          type: c.object_type || c.type || typeKey || 'other', cat: catKey || '', object: String(objName),
+          type: t, cat: catKey || '', object: info.name, kind: info.kind, ctx: info.ctx, ruleCount: info.ruleCount,
           location: c.location || c.folder || c.device_group || c.vsys || '',
           check: w.check_name || w.name || `Check ${w.check_id ?? ''}`, check_id: w.check_id ?? '',
           severity: SEVS.includes(w.check_type) ? w.check_type : (SEVS.includes(w.severity) ? w.severity : (w.check_type || w.severity || '')),
           state: stateOf(w), message: w.check_message || w.message || '',
+          failed: w.failed_fields && typeof w.failed_fields === 'object' && Object.keys(w.failed_fields).length ? w.failed_fields : null,
+          cfg: c,
         });
       }
       return;
@@ -574,6 +659,7 @@ function extractRows(data) {
     }
   };
   walk(data, null, null);
+  out.forEach((r, i) => r.idx = i);
   return out;
 }
 
@@ -702,11 +788,12 @@ function draw() {
           <td>${typePill(g)}</td><td>${box(g.fail,'f')}</td><td>${box(g.pass,'p')}</td>
           <td class="nw"><span class="mini"><i style="width:${pct}%"></i></span>${pct}%</td></tr>` +
           (open ? (g.items[0]?.message ? `<tr class="desc"><td colspan="6">${esc(g.items[0].message)}</td></tr>` : '')
-            + g.items.slice(0, 300).map(r => `<tr class="sub"><td></td><td colspan="5"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">${stCell(r.state)}<b style="font-weight:500">${esc(r.object)}</b>${r.location ? `<span class="muted">${esc(r.location)}</span>` : ''}</div>${r.message && r.message !== g.items[0].message ? `<div class="muted" style="margin:3px 0 0 0">${esc(r.message)}</div>` : ''}</td></tr>`).join('')
+            + g.items.slice(0, 300).map(r => `<tr class="sub"><td></td><td colspan="5"><div class="objline">${stCell(r.state)}<b style="font-weight:500">${esc(r.object)}</b>${r.location && r.kind === 'object' ? `<span class="muted">${esc(r.location)}</span>` : ''}<span class="sp"></span>${cfgButton(r)}</div>${detailHtml(r)}${r.message && r.message !== g.items[0].message ? `<div class="muted" style="margin:3px 0 0 0">${esc(r.message)}</div>` : ''}${cfgBlock(r)}</td></tr>`).join('')
             + (g.items.length > 300 ? `<tr class="sub"><td></td><td colspan="5" class="muted">… and ${g.items.length-300} more</td></tr>` : '') : '');
       }).join('')}</tbody></table></div>`;
     v.querySelectorAll('tr.grp').forEach(tr => tr.onclick = () => {
       const k = tr.dataset.k; openGroups.has(k) ? openGroups.delete(k) : openGroups.add(k); draw(); });
+    wireCfgButtons(v);
     return;
   }
 
@@ -714,24 +801,27 @@ function draw() {
     const agg = new Map();
     for (const r of f) {
       const k = r.type + '|' + r.location + '|' + r.object;
-      const g = agg.get(k) || {key:k, object:r.object, type:r.type, cat:r.cat, location:r.location, items:[], worst:9};
+      const g = agg.get(k) || {key:k, object:r.object, type:r.type, cat:r.cat, location:r.location, kind:r.kind, ctx:r.ctx, first:r, items:[], worst:9};
       g.items.push(r); if (r.state === 'fail') g.worst = Math.min(g.worst, sevRank(r.severity)); agg.set(k, g);
     }
     const groups = [...agg.values()].sort((a,b) => a.worst - b.worst || b.items.length - a.items.length);
     $('#count').textContent = `${fmtN(groups.length)} objects`;
     v.innerHTML = `<div class="tw"><table><thead><tr><th>Object</th><th>Object type</th><th>Location</th><th>Results</th></tr></thead><tbody>
-      ${groups.slice(0, LIMIT).map(g => `<tr><td><b style="font-weight:500">${esc(g.object)}</b></td><td>${typePill(g)}</td><td class="muted">${esc(g.location)}</td>
-        <td>${g.items.sort((a,b)=>sevRank(a.severity)-sevRank(b.severity)).map(r => `<div style="display:flex;gap:12px;align-items:center;padding:2px 0">${sevIcon(r.severity).replace('<svg ','<svg width="16" height="16" ')}${stCell(r.state)}<span class="muted">${esc(r.check)}</span></div>`).join('')}</td></tr>`).join('')}
+      ${groups.slice(0, LIMIT).map(g => `<tr><td><b style="font-weight:500">${esc(g.object)}</b>${g.ctx ? `<div class="ctx">${esc(g.ctx)}</div>` : ''}<div style="margin-top:6px">${cfgButton(g.first)}</div>${cfgBlock(g.first)}</td><td>${typePill(g)}</td><td class="muted">${esc(g.location)}</td>
+        <td>${g.items.sort((a,b)=>sevRank(a.severity)-sevRank(b.severity)).map(r => `<div class="resline"><div style="display:flex;gap:12px;align-items:center">${sevIcon(r.severity).replace('<svg ','<svg width="16" height="16" ')}${stCell(r.state)}<span class="muted">${esc(r.check)}</span></div>${r.state === 'fail' && r.failed ? `<div class="ffs" style="margin-left:28px">${Object.entries(r.failed).map(([k, v]) => `<span class="ff"><code>${esc(k)}</code><span>=</span><b>${fmtVal(v)}</b></span>`).join('')}</div>` : ''}</div>`).join('')}</td></tr>`).join('')}
       </tbody></table></div>${groups.length > LIMIT ? `<div class="note">Showing the first ${LIMIT} — refine the filters.</div>` : ''}`;
+    wireCfgButtons(v);
     return;
   }
 
   const s = f.slice().sort((a,b) => sevRank(a.severity) - sevRank(b.severity));
   $('#count').textContent = `${fmtN(f.length)} of ${fmtN(rows.length)} results`;
-  v.innerHTML = `<div class="tw"><table><thead><tr><th>Severity</th><th>Status</th><th>Check</th><th>Object</th><th>Object type</th><th>Location</th><th>Message</th></tr></thead><tbody>
+  v.innerHTML = `<div class="tw"><table><thead><tr><th>Severity</th><th>Status</th><th>Check</th><th>Object</th><th>Object type</th><th>Location</th><th>Failing setting / message</th></tr></thead><tbody>
     ${s.slice(0, LIMIT).map(r => `<tr><td>${sevBadge(r.severity)}</td><td>${stCell(r.state)}</td><td>${esc(r.check)}</td>
-      <td>${esc(r.object)}</td><td>${typePill(r)}</td><td class="muted">${esc(r.location)}</td><td class="muted">${esc(r.message)}</td></tr>`).join('')}
+      <td>${esc(r.object)}${r.ctx ? `<div class="ctx">${esc(r.ctx)}</div>` : ''}<div style="margin-top:6px">${cfgButton(r)}</div></td><td>${typePill(r)}</td><td class="muted">${esc(r.location)}</td>
+      <td>${detailHtml({...r, ctx: ''})}<div class="muted">${esc(r.message)}</div>${cfgBlock(r)}</td></tr>`).join('')}
     </tbody></table></div>${s.length > LIMIT ? `<div class="note">Showing the first ${LIMIT} — refine the filters or export to CSV.</div>` : ''}`;
+  wireCfgButtons(v);
 }
 
 function setTab(t) {
@@ -745,9 +835,9 @@ let deb; $('#q').oninput = () => { clearTimeout(deb); deb = setTimeout(draw, 200
 ['#fState','#fSev','#fType'].forEach(s => $(s).onchange = draw);
 
 $('#csv').onclick = () => {
-  const cols = ['severity','state','check_id','check','type','object','location','message'];
+  const cols = ['severity','state','check_id','check','type','object','context','location','failed_settings','message'];
   const q = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
-  const csv = '﻿' + cols.join(';') + '\n' + filtered().map(r => cols.map(c => q(r[c])).join(';')).join('\n');
+  const csv = '﻿' + cols.join(';') + '\n' + filtered().map(r => cols.map(c => q(c === 'failed_settings' ? failedText(r) : c === 'context' ? r.ctx : r[c])).join(';')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
   a.download = `BPA_${($('#dTitle').textContent||'report').replace(/[^\w.-]+/g,'_')}.csv`;

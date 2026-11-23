@@ -16,7 +16,8 @@ This tool puts a web interface on top of it: drop in a config, get a clear repor
 - **Complete API flow:** get a token, create an upload task, upload the config, poll the status, download the report.
 - **Everything at a glance:** adoption rate, pass/fail/excepted, fails by severity, adoption by domain (policies, objects, network, device) and adoption by object type.
 - **Three views.** By check (expand a check to see the failing objects), by object, and all results. Filter by status, severity and object type, or search the text.
-- **Export** to CSV (opens correctly in Excel) and to the original JSON.
+- **Pinpoints what fails.** For every failing object you see which rule, profile or setting it is, with context for rules (zones, action, applications), the exact setting that fails with its current value (for example `service = any` or `permitted_ip = empty`), and the full configuration of the object on request. Rulebase-wide checks say which rulebase it is and how many rules it contains.
+- **Export** to CSV (opens correctly in Excel, including the failing settings) and to the original JSON.
 - **History** of all reports, kept in a Docker volume.
 - **Resilient to API quirks.** When the limit of 5 active jobs is hit (HTTP 429), the tool waits automatically. It looks for the download link in several places, unpacks gzip reports itself, and falls back to a raw JSON view if the structure is unknown.
 - **Privacy:** the local copy of the config is deleted as soon as the upload succeeds. By default the tool also asks Palo Alto to delete the config after processing (`delete_after_processing`).
