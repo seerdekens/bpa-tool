@@ -31,6 +31,22 @@ The project is meant for international use: the user interface, log messages, er
 
 The documentation on pan.dev sometimes differs from what the API actually does. Be tolerant when parsing, and prefer adding fallbacks over making assumptions.
 
+## Config inspection and cleanup (backend, at upload)
+
+- `inspect_config()` reads version, hostname and type. A config is **Panorama** when it has device groups or templates (`config/devices/entry/{device-group,template,…}`), or a `<panorama>` section without vsys. A firewall's merged config also has a `<panorama>` section (the pushed config), so that alone proves nothing; `pushed_config` is set then.
+- `analyze_unused()` runs on the XML right after upload (before the config is deleted) and writes `data/<id>.cleanup.json`, served by `GET /api/reports/{id}/cleanup`. Failure is non-fatal: the BPA still runs.
+  - Definitions: entries in `OBJECT_CONTAINERS` directly under a scope (`shared`, a `vsys` entry, a `device-group` entry; also inside templates and under `/config/panorama` for pushed config), `PROFILE_CONTAINERS` under `<profiles>`, and log forwarding profiles under `log-settings/profiles`.
+  - References: every element text outside `NON_REFERENCE_TAGS` (descriptions); `<filter>` texts are tokenised. Matching is by name only, across types and scopes: deliberately conservative, a false "used" is fine, a false "unused" is not.
+  - Fixed point: used = referenced by non-object config, or by a used object. Unused objects that are only referenced by unused objects get status `only_unused_refs`. Addresses with a tag that a used dynamic group filters on count as used.
+  - Shared/pushed objects on a firewall get a `note`: other firewalls may use them.
+- Zero-hit rules need runtime hit counts (`show rule-hit-count`), which the config does not contain. Not implemented yet.
+
+## Export (frontend)
+
+- Excel: `buildXlsx()` is a small SpreadsheetML writer (inline strings, uncompressed zip with CRC32) in `index.html`, so no library or build step is needed. Sheets: Summary, Findings, Checks and, if available, Unused objects. Header rows are bold, frozen and filterable; percentages are real numbers with format `0%`.
+- CSV: the rows of the current tab with its filters (`FINDING_COLS` or `CLEANUP_COLS`), `;`-separated with a BOM so Excel opens it correctly.
+- When adding a column, add it to the column definitions, not to the export functions.
+
 ## Report structure
 
 ```

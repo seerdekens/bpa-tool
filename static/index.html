@@ -209,6 +209,21 @@
   .ff b{font-weight:500;color:var(--failink);word-break:break-word}
   .ff i{color:var(--muted);font-style:italic;font-weight:400}
   .resline{padding:3px 0}
+  .menuwrap{position:relative}
+  .caret2{font-size:10px;color:var(--muted);margin-left:2px}
+  .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:20;min-width:280px;background:var(--panel);border:1px solid var(--line2);
+    border-radius:10px;padding:6px;box-shadow:0 12px 32px rgba(0,0,0,.35);display:flex;flex-direction:column}
+  .menu button,.menu a{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;background:none;border:0;border-radius:7px;
+    padding:8px 10px;font-size:13.5px;color:var(--ink);cursor:pointer;text-decoration:none;font-weight:500}
+  .menu button:hover,.menu a:hover{background:var(--panel2)}
+  .menu small{font-size:11.5px;color:var(--muted);font-weight:400}
+  .tcount{font-size:11px;background:var(--panel3);color:var(--ink2);border-radius:9px;padding:0 7px;margin-left:4px}
+  .clsum{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+  .tchip{display:inline-flex;align-items:baseline;gap:7px;background:var(--panel);border:1px solid var(--line2);border-radius:8px;padding:6px 11px;font-size:13px;color:var(--ink2);cursor:pointer;font-weight:400}
+  .tchip b{font-weight:600;color:var(--bad)} .tchip i{font-style:normal;color:var(--dim);font-size:12px}
+  .tchip.zero b{color:var(--teal)} .tchip:hover{border-color:var(--ghosthover)}
+  .clnote{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--teal);border-radius:8px;padding:12px 14px;font-size:13px;color:var(--ink2);margin-bottom:14px;line-height:1.6}
+  .clnote .warnline{color:var(--wrn)}
   .otype{font-size:12px;color:var(--muted)}
   .locb{font-size:11px;border:1px solid var(--line2);border-radius:5px;padding:0 6px;color:var(--muted);white-space:nowrap}
   .locb.builtin{border-color:var(--lav);color:var(--lav)}
@@ -355,8 +370,14 @@
           <h1><span id="dTitle"></span>
             <div class="actions">
               <button class="ghost hidden" id="resume" title="Fetch the result of this task again from Palo Alto Networks, without uploading the config again"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/></svg>Fetch result again</button>
-              <button class="ghost hidden" id="csv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg>CSV</button>
-              <a class="btn ghost hidden" id="dDownload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg>JSON</a>
+              <div class="menuwrap hidden" id="exportWrap">
+                <button class="ghost" id="exportBtn" aria-haspopup="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/></svg>Export<span class="caret2">▾</span></button>
+                <div class="menu hidden" id="exportMenu" role="menu">
+                  <button data-x="xlsx" role="menuitem">Excel workbook (.xlsx)<small>Summary, all findings, checks and unused objects</small></button>
+                  <button data-x="csv" role="menuitem">CSV — current view<small>The rows in the current tab, with its filters</small></button>
+                  <a id="dDownload" role="menuitem">Raw report (.json)<small>As returned by the Posture API</small></a>
+                </div>
+              </div>
               <button class="ghost danger" id="dDelete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>Delete</button>
             </div>
           </h1>
@@ -371,6 +392,7 @@
               <button data-tab="checks" class="on">Per check</button>
               <button data-tab="objects">Per object</button>
               <button data-tab="findings">All results</button>
+              <button data-tab="cleanup" id="tabCleanup" class="hidden">Cleanup <span class="tcount" id="cleanCount"></span></button>
               <button data-tab="raw">Raw JSON</button>
             </div>
 
@@ -419,6 +441,7 @@ const fmtN = n => Number(n).toLocaleString();
 
 let settings, file = null, selected = null, pollTimer = null;
 let report = null, rows = [], tab = 'checks', openGroups = new Set();
+let cleanup = null, cleanupFor = null;
 
 async function api(path, opts={}) {
   const r = await fetch(path, opts);
@@ -477,7 +500,7 @@ async function pick(f) {
   try {
     const fd = new FormData(); fd.append('file', f);
     const i = await api('/api/inspect', {method:'POST', body: fd});
-    box.innerHTML = `<b>${esc(f.name)}</b> · ${sz} MB<br><span class="muted">${i.type === 'panorama' ? 'Panorama' : 'Firewall'}</span>`
+    box.innerHTML = `<b>${esc(f.name)}</b> · ${sz} MB<br><span class="muted">${i.type === 'panorama' ? 'Panorama' : i.pushed_config ? 'Firewall (merged, incl. Panorama/SCM config)' : 'Firewall'}</span>`
       + (i.hostname ? ` · ${esc(i.hostname)}` : '') + (i.version ? ` · PAN-OS ${esc(i.version)}` : '');
     if (!$('#label').value && i.hostname) $('#label').placeholder = i.hostname;
   } catch (e) {
@@ -547,6 +570,12 @@ async function showDetail(t) {
   $('#dLog').scrollTop = 1e9;
   $('#dDownload').classList.toggle('hidden', !t.has_report);
   $('#dDownload').href = `/api/reports/${t.id}/json?download=true`;
+  if (cleanupFor !== t.id) {
+    cleanup = null; cleanupFor = t.id;
+    if (t.has_cleanup) { try { cleanup = await api(`/api/reports/${t.id}/cleanup`); } catch { cleanup = null; } }
+  }
+  $('#tabCleanup').classList.toggle('hidden', !cleanup);
+  $('#cleanCount').textContent = cleanup ? cleanup.unused.length : '';
   $('#resume').onclick = async () => {
     const fd = new FormData();
     fd.append('client_id', $('#cid').value.trim());
@@ -565,7 +594,8 @@ async function showDetail(t) {
     renderReport();
   }
   $('#report').classList.toggle('hidden', !t.has_report);
-  $('#csv').classList.toggle('hidden', !t.has_report || !rows.length);
+  $('#exportWrap').classList.toggle('hidden', !t.has_report);
+  if (tab === 'cleanup' && !cleanup) setTab('checks');
   // Offer to fetch the result again when the task exists at Palo Alto but we have no usable report
   const usable = t.status === 'DONE' && t.has_report && rows.length > 0;
   $('#resume').classList.toggle('hidden', !t.remote_id || RUNNING.includes(t.status) || usable);
@@ -873,6 +903,7 @@ function draw() {
   ['#fState','#fSev','#fType'].forEach(s => $(s).classList.toggle('set', !!$(s).value));
   const v = $('#view');
   if (tab === 'raw') { $('#count').textContent = ''; v.innerHTML = `<div class="tree">${tree(null, report, 0)}</div>`; return; }
+  if (tab === 'cleanup') { drawCleanup(v); return; }
   const f = filtered();
 
   if (tab === 'checks') {
@@ -938,22 +969,184 @@ function draw() {
 function setTab(t) {
   tab = t;
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
-  $('#filters').classList.toggle('hidden', t === 'raw' || !rows.length);
+  $('#filters').classList.toggle('hidden', t === 'raw' || t === 'cleanup' || !rows.length);
   draw();
 }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 let deb; $('#q').oninput = () => { clearTimeout(deb); deb = setTimeout(draw, 200); };
 ['#fState','#fSev','#fType'].forEach(s => $(s).onchange = draw);
 
-$('#csv').onclick = () => {
-  const cols = ['severity','state','check_id','check','type','object','context','location','used_by','failed_settings','message'];
-  const q = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
-  const csv = '﻿' + cols.join(';') + '\n' + filtered().map(r => cols.map(c => q(c === 'failed_settings' ? failedText(r) : c === 'context' ? r.ctx : c === 'used_by' ? (r.usedBy ? (r.usedBy.length ? r.usedBy.join(', ') : 'not used') : '') : r[c])).join(';')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
-  a.download = `BPA_${($('#dTitle').textContent||'report').replace(/[^\w.-]+/g,'_')}.csv`;
-  a.click(); URL.revokeObjectURL(a.href);
-};
+/* ---------- Cleanup: unused objects ---------- */
+const CL_STATUS = {unused: 'Not referenced anywhere', only_unused_refs: 'Only used by unused objects'};
+function clFiltered() {
+  if (!cleanup) return [];
+  const q = ($('#cq')?.value || '').trim().toLowerCase(), ty = $('#cType')?.value || '', st = $('#cStatus')?.value || '';
+  return cleanup.unused.filter(u => (!ty || u.type === ty) && (!st || u.status === st) &&
+    (!q || `${u.name} ${u.type} ${u.location} ${u.referenced_by.join(' ')}`.toLowerCase().includes(q)));
+}
+function drawCleanup(v) {
+  const types = Object.entries(cleanup.totals).sort((a, b) => b[1].unused - a[1].unused || a[0].localeCompare(b[0]));
+  const shared = cleanup.unused.filter(u => u.note).length;
+  v.innerHTML = `
+    <div class="clsum">${types.map(([t, n]) => `<button class="tchip${n.unused ? '' : ' zero'}" data-t="${esc(t)}" title="${n.unused} of ${n.defined} unused">
+      <span>${esc(t)}</span><b>${fmtN(n.unused)}</b><i>/ ${fmtN(n.defined)}</i></button>`).join('')}</div>
+    <div class="clnote">
+      <b>${fmtN(cleanup.unused.length)}</b> of ${fmtN(cleanup.objects_checked)} objects are not used by any rule, group, profile or other configuration.
+      An object counts as used as soon as its name is referenced anywhere, so this list errs on the safe side.
+      ${shared ? `<br><span class="warnline">${fmtN(shared)} of them are shared or pushed by Panorama/SCM: another firewall may still use them. Verify in Panorama/SCM before deleting.</span>` : ''}
+      <br><span class="muted">Zero-hit rules are not included: hit counts are runtime data that the configuration file does not contain.</span>
+    </div>
+    <div class="filters">
+      <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="cq" placeholder="Search…"></div>
+      <select id="cType"><option value="">All object types</option>${types.filter(([, n]) => n.unused).map(([t]) => `<option value="${esc(t)}">Type = ${esc(t)}</option>`).join('')}</select>
+      <select id="cStatus"><option value="">All statuses</option><option value="unused">Not referenced anywhere</option><option value="only_unused_refs">Only used by unused objects</option></select>
+      <span class="sp"></span><span class="count" id="ccount"></span>
+    </div>
+    <div class="tw"><table><thead><tr><th>Object type</th><th>Name</th><th>Location</th><th>Status</th></tr></thead><tbody id="cbody"></tbody></table></div>`;
+  const body = () => {
+    const list = clFiltered();
+    $('#ccount').textContent = `${fmtN(list.length)} of ${fmtN(cleanup.unused.length)} unused objects`;
+    ['#cType', '#cStatus'].forEach(s => $(s).classList.toggle('set', !!$(s).value));
+    $('#cbody').innerHTML = list.slice(0, LIMIT).map(u => `<tr>
+      <td><span class="pill obj">${esc(u.type)}</span></td>
+      <td><b style="font-weight:500">${esc(u.name)}</b></td>
+      <td>${u.scope === 'shared' || u.scope === 'pushed' ? `<span class="locb builtin">${esc(u.location)}</span>` : `<span class="muted">${esc(u.location)}</span>`}</td>
+      <td>${u.status === 'unused' ? `<span class="st st-fail"><svg><use href="#i-minus"/></svg><span>${CL_STATUS.unused}</span></span>`
+        : `<span class="st st-excepted"><svg><use href="#i-minus"/></svg><span>${CL_STATUS.only_unused_refs}</span></span><div class="ctx">Referenced by: ${esc(u.referenced_by.join(', '))}</div>`}
+        ${u.note ? `<div class="use none">${esc(u.note)}</div>` : ''}</td></tr>`).join('')
+      + (list.length > LIMIT ? `<tr><td colspan="4" class="muted">Showing the first ${LIMIT} — refine the filters or export.</td></tr>` : '')
+      || `<tr><td colspan="4" class="muted">No unused objects match these filters.</td></tr>`;
+  };
+  let d2; $('#cq').oninput = () => { clearTimeout(d2); d2 = setTimeout(body, 150); };
+  $('#cType').onchange = body; $('#cStatus').onchange = body;
+  v.querySelectorAll('.tchip').forEach(b => b.onclick = () => { $('#cType').value = $('#cType').querySelector(`option[value="${CSS.escape(b.dataset.t)}"]`) ? b.dataset.t : ''; body(); });
+  body();
+}
+
+/* ---------- Export ---------- */
+const reportName = () => ($('#dTitle').textContent || 'report').replace(/[^\w.-]+/g, '_');
+const usedByText = r => r.usedBy ? (r.usedBy.length ? r.usedBy.join(', ') : 'not used') : '';
+const FINDING_COLS = [
+  ['Severity', r => r.severity], ['Status', r => ST_LABEL[r.state] || r.state], ['Check ID', r => r.check_id],
+  ['Check', r => r.check], ['Object type', r => nice(r.type)], ['Domain', r => nice(r.cat)], ['Object', r => r.object],
+  ['Location', r => r.location], ['Context', r => r.ctx || ''], ['Used by', usedByText],
+  ['Failing settings', r => failedText(r)], ['Message', r => r.message],
+];
+const CLEANUP_COLS = [
+  ['Object type', u => u.type], ['Name', u => u.name], ['Location', u => u.location],
+  ['Status', u => CL_STATUS[u.status] || u.status], ['Referenced by', u => u.referenced_by.join(', ')], ['Note', u => u.note],
+];
+function download(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function exportCsv() {
+  const [cols, data, suffix] = tab === 'cleanup' && cleanup ? [CLEANUP_COLS, clFiltered(), 'unused-objects'] : [FINDING_COLS, filtered(), 'findings'];
+  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const csv = '﻿' + cols.map(c => q(c[0])).join(';') + '\n' + data.map(r => cols.map(c => q(c[1](r))).join(';')).join('\n');
+  download(new Blob([csv], {type: 'text/csv;charset=utf-8'}), `BPA_${reportName()}_${suffix}.csv`);
+}
+function exportXlsx() {
+  const c = {pass: 0, fail: 0, excepted: 0};
+  rows.forEach(r => c[r.state] = (c[r.state] || 0) + 1);
+  const evald = c.pass + c.fail;
+  const sev = Object.fromEntries(SEVS.map(s => [s, rows.filter(r => r.state === 'fail' && r.severity === s).length]));
+  const meta = [...document.querySelectorAll('#dMeta .chip')].map(ch => [ch.childNodes[0].textContent.trim(), ch.querySelector('b')?.textContent || '']);
+  const summary = [['BPA report', $('#dTitle').textContent], ...meta, [],
+    ['Adoption (pass / assessed)', {pct: evald ? c.pass / evald : 0}], ['Results', rows.length], ['Pass', c.pass], ['Fail', c.fail], ['Excepted', c.excepted], [],
+    ['Fails by severity', ''], ...SEVS.map(s => [s, sev[s]])];
+  if (cleanup) summary.push([], ['Unused objects', cleanup.unused.length], ['Objects checked', cleanup.objects_checked]);
+  const types = {};
+  rows.forEach(r => { const t = types[r.type] ||= {pass: 0, fail: 0, excepted: 0}; t[r.state]++; });
+  summary.push([], ['Adoption by object type'], ['Object type', 'Pass', 'Fail', 'Excepted', 'Adoption']);
+  const typeHeaderRow = summary.length - 1;
+  Object.entries(types).sort((a, b) => b[1].fail - a[1].fail).forEach(([t, v]) =>
+    summary.push([nice(t), v.pass, v.fail, v.excepted, {pct: v.pass + v.fail ? v.pass / (v.pass + v.fail) : 0}]));
+
+  const stRank = {fail: 0, excepted: 1, pass: 2};
+  const sorted = rows.slice().sort((a, b) => (stRank[a.state] ?? 3) - (stRank[b.state] ?? 3) || sevRank(a.severity) - sevRank(b.severity)
+    || String(a.check).localeCompare(String(b.check)));
+  const findings = [FINDING_COLS.map(x => x[0]), ...sorted.map(r => FINDING_COLS.map(x => x[1](r)))];
+
+  const agg = new Map();
+  for (const r of rows) {
+    const k = r.type + '|' + r.check;
+    const g = agg.get(k) || {severity: r.severity, id: r.check_id, check: r.check, type: r.type, pass: 0, fail: 0, excepted: 0, msg: r.message};
+    g[r.state]++; agg.set(k, g);
+  }
+  const checks = [['Severity', 'Check ID', 'Check', 'Object type', 'Fail', 'Pass', 'Excepted', 'Adoption', 'Description'],
+    ...[...agg.values()].sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || b.fail - a.fail)
+      .map(g => [g.severity, g.id, g.check, nice(g.type), g.fail, g.pass, g.excepted, {pct: g.pass + g.fail ? g.pass / (g.pass + g.fail) : 0}, g.msg])];
+
+  const sheets = [
+    {name: 'Summary', rows: summary, widths: [34, 22, 10, 10, 12], boldRows: new Set([0, typeHeaderRow])},
+    {name: 'Findings', rows: findings, widths: [13, 11, 9, 60, 26, 12, 30, 18, 34, 34, 50, 70], header: true, wrap: new Set([3, 10, 11])},
+    {name: 'Checks', rows: checks, widths: [13, 9, 70, 26, 8, 8, 10, 11, 80], header: true, wrap: new Set([2, 8])},
+  ];
+  if (cleanup) sheets.push({name: 'Unused objects', header: true, widths: [26, 34, 34, 30, 40, 60],
+    rows: [CLEANUP_COLS.map(x => x[0]), ...cleanup.unused.map(u => CLEANUP_COLS.map(x => x[1](u)))]});
+  download(buildXlsx(sheets), `BPA_${reportName()}.xlsx`);
+}
+
+/* Minimal .xlsx writer: SpreadsheetML in an uncompressed zip, no libraries needed */
+function buildXlsx(sheets) {
+  const x = v => String(v ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const col = n => { let s = ''; for (n++; n; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
+  const sheetXml = sh => {
+    const cols = sh.widths ? `<cols>${sh.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '';
+    const data = sh.rows.map((row, ri) => `<row r="${ri + 1}">${(row || []).map((v, ci) => {
+      const ref = col(ci) + (ri + 1);
+      const head = (sh.header && ri === 0) || sh.boldRows?.has(ri);
+      if (v && typeof v === 'object' && 'pct' in v) return `<c r="${ref}" s="2"><v>${v.pct}</v></c>`;
+      if (typeof v === 'number' && isFinite(v)) return `<c r="${ref}"${head ? ' s="1"' : ''}><v>${v}</v></c>`;
+      if (v === '' || v == null) return '';
+      const st = head ? 1 : sh.wrap?.has(ci) ? 3 : 0;
+      return `<c r="${ref}" t="inlineStr"${st ? ` s="${st}"` : ''}><is><t xml:space="preserve">${x(v)}</t></is></c>`;
+    }).join('')}</row>`).join('');
+    const lastCol = col(Math.max(...sh.rows.map(r => (r || []).length), 1) - 1);
+    const pane = sh.header ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` : '';
+    const filter = sh.header && sh.rows.length > 1 ? `<autoFilter ref="A1:${lastCol}${sh.rows.length}"/>` : '';
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${pane}${cols}<sheetData>${data}</sheetData>${filter}</worksheet>`;
+  };
+  const files = {
+    '[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`,
+    '_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    'xl/workbook.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sh, i) => `<sheet name="${x(sh.name.replace(/[\[\]:*?\/\\]/g, ' ').slice(0, 31))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${(dn => dn ? `<definedNames>${dn}</definedNames>` : '')(sheets.map((sh, i) => sh.header && sh.rows.length > 1 ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${x(sh.name.slice(0, 31))}'!$A$1:$${col(Math.max(...sh.rows.map(r => (r || []).length)) - 1)}$${sh.rows.length}</definedName>` : '').join(''))}</workbook>`,
+    'xl/_rels/workbook.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+    'xl/styles.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8EDF5"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+  };
+  sheets.forEach((sh, i) => files[`xl/worksheets/sheet${i + 1}.xml`] = sheetXml(sh));
+  // zip (store, no compression)
+  const enc = new TextEncoder(), crcT = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
+  const crc = b => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = crcT[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  const parts = [], central = []; let offset = 0;
+  for (const [name, text] of Object.entries(files)) {
+    const nb = enc.encode(name), data = enc.encode(text), c = crc(data);
+    const lh = new DataView(new ArrayBuffer(30));
+    [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, 0, 2], [12, 0x21, 2], [14, c, 4], [18, data.length, 4], [22, data.length, 4], [26, nb.length, 2], [28, 0, 2]]
+      .forEach(([o, v, l]) => l === 4 ? lh.setUint32(o, v, true) : lh.setUint16(o, v, true));
+    parts.push(new Uint8Array(lh.buffer), nb, data);
+    const ch = new DataView(new ArrayBuffer(46));
+    [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, 0, 2], [14, 0x21, 2], [16, c, 4], [20, data.length, 4], [24, data.length, 4], [28, nb.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, offset, 4]]
+      .forEach(([o, v, l]) => l === 4 ? ch.setUint32(o, v, true) : ch.setUint16(o, v, true));
+    central.push(new Uint8Array(ch.buffer), nb);
+    offset += 30 + nb.length + data.length;
+  }
+  const cdSize = central.reduce((a, b) => a + b.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, Object.keys(files).length, 2], [10, Object.keys(files).length, 2], [12, cdSize, 4], [16, offset, 4], [20, 0, 2]]
+    .forEach(([o, v, l]) => l === 4 ? end.setUint32(o, v, true) : end.setUint16(o, v, true));
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+
+$('#exportBtn').onclick = e => { e.stopPropagation(); $('#exportMenu').classList.toggle('hidden'); };
+document.addEventListener('click', () => $('#exportMenu').classList.add('hidden'));
+$('#exportMenu').querySelectorAll('[data-x]').forEach(b => b.onclick = () => {
+  $('#exportMenu').classList.add('hidden');
+  b.dataset.x === 'xlsx' ? exportXlsx() : exportCsv();
+});
 
 /* ---------- Raw JSON tree ---------- */
 function tree(key, val, depth) {

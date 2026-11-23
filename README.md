@@ -18,7 +18,8 @@ This tool puts a web interface on top of it: drop in a config, get a clear repor
 - **Three views.** By check (expand a check to see the failing objects), by object, and all results. Filter by status, severity and object type, or search the text.
 - **Pinpoints what fails.** For every failing object you see which rule, profile or setting it is, with context for rules (zones, action, applications), the exact setting that fails with its current value (for example `service = any`, or the DNS category `pan-dns-sec-cc` with action `default`), and the full configuration of the object on request. Rulebase-wide checks say which rulebase it is and how many rules it contains.
 - **Shows the impact.** Profiles show which security or decryption rules use them. Built-in (predefined) profiles that no rule uses are marked as such and sorted last, so you can focus on what actually affects traffic.
-- **Export** to CSV (opens correctly in Excel, including the failing settings) and to the original JSON.
+- **Config cleanup: unused objects.** At upload, the tool analyses the config itself and lists address and service objects and groups, application groups and filters, tags, schedules, EDLs, security profiles, profile groups, custom URL categories and log forwarding profiles that nothing references. Objects only used inside unused groups are flagged too. Shared and Panorama/SCM-pushed objects are marked, because other firewalls may still use them.
+- **Export** the whole report to Excel (.xlsx: summary, all findings, checks and unused objects, with filters and frozen headers), the current view to CSV, or the original JSON.
 - **History** of all reports, kept in a Docker volume.
 - **Resilient to API quirks.** When the limit of 5 active jobs is hit (HTTP 429), the tool waits automatically. It looks for the download link in several places, unpacks gzip reports itself, and falls back to a raw JSON view if the structure is unknown.
 - **Privacy:** the local copy of the config is deleted as soon as the upload succeeds. By default the tool also asks Palo Alto to delete the config after processing (`delete_after_processing`).
@@ -26,6 +27,8 @@ This tool puts a web interface on top of it: drop in a config, get a clear repor
 - **Mock mode** to try the tool without credentials.
 
 ![By check, with the failing objects](docs/screenshot-checks.png)
+
+![Cleanup: unused objects](docs/screenshot-cleanup.png)
 
 Light and dark mode are both supported. The tool follows your OS setting on first visit and remembers your choice.
 
@@ -86,7 +89,7 @@ Under the container's *Options → Features*, enable **nesting** and **keyctl**.
 | Situation | Which file |
 |---|---|
 | Locally managed firewall | `running-config.xml` via *Device → Setup → Operations → Export named configuration snapshot* |
-| Firewall **managed by Panorama** | `.merged-running-config.xml`: the local config **plus** everything Panorama pushes |
+| Firewall **managed by Panorama or SCM** | `.merged-running-config.xml`: the local config **plus** everything Panorama/SCM pushes |
 | Panorama itself | Panorama's `running-config.xml` (device groups and templates assessed centrally) |
 
 A regular export from a Panorama-managed firewall does **not** contain the rules and objects pushed by Panorama. Get the merged config with:
@@ -95,7 +98,14 @@ A regular export from a Panorama-managed firewall does **not** contain the rules
 scp export configuration from .merged-running-config.xml to user@<host>:/path/fw-merged.xml
 ```
 
-You can also take it from a tech support file (*Device → Support*), under `opt/pancfg/mgmt/saved-configs/`.
+You can also take it from a tech support file (*Device → Support*), under `opt/pancfg/mgmt/saved-configs/`, or show it on the CLI with `show config merged` (after `set cli config-output-format xml`).
+
+### About the cleanup analysis
+
+- An object counts as **used** as soon as its name appears as a value anywhere in the config (rules, groups, profiles, zones, NAT, dynamic group filters…), except in descriptions. The list therefore errs on the safe side.
+- Addresses with a tag that a used dynamic address group filters on count as used.
+- **Zero-hit rules are not included**: hit counts are runtime counters on the firewall and are not in the config file.
+- Upload a merged config for a Panorama/SCM-managed firewall; with a plain export, pushed rules are missing and objects they use would look unused.
 
 ## Configuration
 

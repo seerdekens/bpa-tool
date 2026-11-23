@@ -66,16 +66,23 @@ FAIL_STATES = {"FAILED", "ERROR", "COMPLETED_WITH_ERROR"}
 def inspect_config(path: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"type": "firewall", "version": None, "hostname": None}
     stack: list[str] = []
+    has_dg_or_template = has_vsys = has_panorama = False
     try:
         for event, elem in ET.iterparse(str(path), events=("start", "end")):
             if event == "start":
                 stack.append(elem.tag)
-                if len(stack) == 1:
+                depth = len(stack)
+                if depth == 1:
                     if elem.tag != "config":
                         raise ValueError("Root element is not <config>: this is not a PAN-OS configuration.")
                     info["version"] = elem.get("detail-version") or elem.get("version")
-                elif len(stack) == 2 and elem.tag == "panorama":
-                    info["type"] = "panorama"
+                elif depth == 2 and elem.tag == "panorama":
+                    has_panorama = True
+                elif depth == 4 and stack[1] == "devices":
+                    if elem.tag in ("device-group", "template", "template-stack", "log-collector-group"):
+                        has_dg_or_template = True
+                    elif elem.tag == "vsys":
+                        has_vsys = True
             else:
                 if "/".join(stack) == "config/devices/entry/deviceconfig/system/hostname":
                     info["hostname"] = (elem.text or "").strip() or None
@@ -84,7 +91,164 @@ def inspect_config(path: Path) -> dict[str, Any]:
                     elem.clear()
     except ET.ParseError as exc:
         raise ValueError(f"Invalid XML: {exc}") from exc
+    # A firewall's merged config also has a <panorama> section (pushed config), so that alone proves nothing
+    if has_dg_or_template or (has_panorama and not has_vsys):
+        info["type"] = "panorama"
+    info["pushed_config"] = has_panorama and not info["type"] == "panorama"
     return info
+
+
+# --------------------------------------------------------------------------- #
+# Config cleanup: unused objects
+# --------------------------------------------------------------------------- #
+# Object containers directly under a scope (vsys, shared, device group…)
+OBJECT_CONTAINERS = {
+    "address": "Address", "address-group": "Address group", "service": "Service",
+    "service-group": "Service group", "application-group": "Application group",
+    "application-filter": "Application filter", "tag": "Tag", "schedule": "Schedule",
+    "external-list": "External dynamic list", "profile-group": "Security profile group",
+}
+# Profile containers under <profiles> in a scope
+PROFILE_CONTAINERS = {
+    "virus": "Antivirus profile", "spyware": "Anti-spyware profile",
+    "vulnerability": "Vulnerability protection profile", "url-filtering": "URL filtering profile",
+    "file-blocking": "File blocking profile", "wildfire-analysis": "WildFire analysis profile",
+    "data-filtering": "Data filtering profile", "dns-security": "DNS security profile",
+    "decryption": "Decryption profile", "custom-url-category": "Custom URL category",
+}
+# Free text that never refers to an object
+NON_REFERENCE_TAGS = {"description", "comment", "comments", "display-name"}
+_ROOT = "__config__"
+_FILTER_TOKEN = re.compile(r"'([^']+)'|\"([^\"]+)\"|([\w.\-:/]+)")
+
+
+def _is_scope(el: ET.Element, parent: ET.Element | None) -> bool:
+    if el.tag == "shared":
+        return True
+    return el.tag == "entry" and parent is not None and parent.tag in ("vsys", "device-group")
+
+
+def _scope_label(chain: list[ET.Element]) -> tuple[str, str]:
+    """Human-readable location and scope kind for the ancestors of a container."""
+    tags = [e.tag for e in chain]
+    pushed = len(tags) > 1 and tags[1] == "panorama"
+    parts: list[str] = []
+    kind = "local"
+    for i, e in enumerate(chain):
+        parent = chain[i - 1] if i else None
+        if e.tag == "entry" and parent is not None and parent.tag == "template":
+            parts.append(f"Template {e.get('name')}")
+        elif e.tag == "entry" and parent is not None and parent.tag == "device-group":
+            parts.append(f"Device group {e.get('name')}")
+            kind = "device-group"
+        elif e.tag == "entry" and parent is not None and parent.tag == "vsys":
+            parts.append(e.get("name") or "vsys")
+        elif e.tag == "shared":
+            parts.append("Shared")
+            kind = "shared"
+    if pushed:
+        kind = "pushed"
+        parts.insert(0, "Pushed (Panorama/SCM)")
+    return " / ".join(parts) or "—", kind
+
+
+def analyze_unused(path: Path) -> dict[str, Any]:
+    """Find objects in a PAN-OS / Panorama config that nothing references.
+
+    Conservative by design: an object counts as used when its name appears as a value anywhere
+    outside free-text fields, regardless of type or scope. False 'used' is acceptable; false
+    'unused' is not.
+    """
+    root = ET.parse(str(path)).getroot()
+    defs: dict[str, dict[str, Any]] = {}          # id -> object
+    refs: dict[str, set[str]] = {}                # name -> ids of referrers (or _ROOT)
+    obj_tags: dict[str, set[str]] = {}            # address id -> its tags
+    dag_tokens: dict[str, set[str]] = {}          # dynamic address group id -> tags in its filter
+
+    def add_ref(name: str, owner: str) -> None:
+        if name and len(name) < 256:
+            refs.setdefault(name, set()).add(owner)
+
+    def walk(el: ET.Element, chain: list[ET.Element], owner: str) -> None:
+        parent = chain[-1] if chain else None
+        grand = chain[-2] if len(chain) > 1 else None
+        great = chain[-3] if len(chain) > 2 else None
+        label = None
+        if el.tag in OBJECT_CONTAINERS and parent is not None and _is_scope(parent, grand):
+            label = OBJECT_CONTAINERS[el.tag]
+        elif el.tag in PROFILE_CONTAINERS and parent is not None and parent.tag == "profiles" \
+                and grand is not None and _is_scope(grand, great):
+            label = PROFILE_CONTAINERS[el.tag]
+        elif el.tag == "profiles" and parent is not None and parent.tag == "log-settings" \
+                and grand is not None and _is_scope(grand, great):
+            label = "Log forwarding profile"
+
+        if label:
+            location, kind = _scope_label(chain + [el])
+            for entry in el.findall("entry"):
+                name = entry.get("name")
+                if not name:
+                    continue
+                oid = f"{label}|{location}|{name}"
+                defs[oid] = {"type": label, "name": name, "location": location, "scope": kind}
+                for child in entry:
+                    walk(child, chain + [el, entry], oid)
+            return
+
+        if el.tag not in NON_REFERENCE_TAGS:
+            text = (el.text or "").strip()
+            if text:
+                if el.tag == "filter":   # dynamic address groups / tag filters: 'tag1' and 'tag2'
+                    for m in _FILTER_TOKEN.finditer(text):
+                        tok = next(g for g in m.groups() if g)
+                        add_ref(tok, owner)
+                        if owner in defs and defs[owner]["type"] == "Address group":
+                            dag_tokens.setdefault(owner, set()).add(tok)
+                if el.tag == "member" and parent is not None and parent.tag == "tag" \
+                        and owner in defs and defs[owner]["type"] == "Address":
+                    obj_tags.setdefault(owner, set()).add(text)
+                add_ref(text, owner)
+        for child in el:
+            walk(child, chain + [el], owner)
+
+    walk(root, [], _ROOT)
+
+    # Fixed point: an object is used if the config references it, or a used object does
+    used: set[str] = {oid for oid, o in defs.items() if _ROOT in refs.get(o["name"], set())}
+    changed = True
+    while changed:
+        changed = False
+        for oid, o in defs.items():
+            if oid in used:
+                continue
+            if any(r in used for r in refs.get(o["name"], set()) if r != oid):
+                used.add(oid)
+                changed = True
+            # Conservative: an address carrying a tag that a used dynamic group filters on may be a member
+            elif obj_tags.get(oid) and any(obj_tags[oid] & toks for g, toks in dag_tokens.items() if g in used):
+                used.add(oid)
+                changed = True
+
+    # Panorama has device groups; a firewall's merged config only has a <panorama> section with pushed config
+    is_panorama = root.find("devices/entry/device-group") is not None
+    unused = []
+    totals: dict[str, dict[str, int]] = {}
+    for oid, o in defs.items():
+        t = totals.setdefault(o["type"], {"defined": 0, "unused": 0})
+        t["defined"] += 1
+        if oid in used:
+            continue
+        t["unused"] += 1
+        referrers = sorted({defs[r]["name"] for r in refs.get(o["name"], set()) if r in defs and r != oid})
+        note = ""
+        if o["scope"] in ("shared", "pushed") and not is_panorama:
+            note = ("Shared or pushed by Panorama/SCM: other firewalls may still use it. "
+                    "Verify in Panorama/SCM before deleting.")
+        unused.append({**o, "status": "only_unused_refs" if referrers else "unused",
+                       "referenced_by": referrers, "note": note})
+    unused.sort(key=lambda u: (u["type"], u["location"], u["name"].lower()))
+    return {"generated": time.time(), "source": "panorama" if is_panorama else "firewall",
+            "objects_checked": len(defs), "totals": totals, "unused": unused}
 
 
 # --------------------------------------------------------------------------- #
@@ -193,6 +357,7 @@ class Task:
             "id", "filename", "label", "info", "delete_after", "status", "remote_id",
             "error", "log", "created", "finished")}
         d["has_report"] = (DATA_DIR / f"{self.id}.report.json").exists()
+        d["has_cleanup"] = (DATA_DIR / f"{self.id}.cleanup.json").exists()
         return d
 
 
@@ -570,10 +735,20 @@ async def create_report(
         cfg_path.unlink(missing_ok=True)
         raise HTTPException(400, str(exc)) from exc
 
+    cleanup_note = None
+    try:
+        (DATA_DIR / f"{tid}.cleanup.json").write_text(json.dumps(analyze_unused(cfg_path)))
+    except Exception as exc:  # noqa: BLE001 - the BPA must still run if the analysis fails
+        cleanup_note = f"Unused-object analysis failed: {exc}"
+
     label = label.strip() or info.get("hostname") or (file.filename or "config")
     task = Task(id=tid, filename=file.filename or "config.xml", label=label, info=info,
                 delete_after=delete_after_processing)
     task.add(f"File received: {task.filename}")
+    if cleanup_note:
+        task.add(cleanup_note, "warn")
+    else:
+        task.add("Unused-object analysis done.")
     TASKS[tid] = task
     _save_index()
     threading.Thread(target=run_task, args=(task, cfg_path, creds), daemon=True).start()
@@ -630,10 +805,18 @@ def get_report_json(tid: str, download: bool = False):
     return JSONResponse(json.loads(p.read_text()))
 
 
+@app.get("/api/reports/{tid}/cleanup")
+def get_cleanup(tid: str):
+    p = DATA_DIR / f"{tid}.cleanup.json"
+    if tid not in TASKS or not p.exists():
+        raise HTTPException(404, "No cleanup analysis for this report")
+    return JSONResponse(json.loads(p.read_text()))
+
+
 @app.delete("/api/reports/{tid}")
 def delete_report(tid: str) -> dict[str, str]:
     TASKS.pop(tid, None)
-    for suffix in (".config.xml", ".report.json"):
+    for suffix in (".config.xml", ".report.json", ".cleanup.json"):
         (DATA_DIR / f"{tid}{suffix}").unlink(missing_ok=True)
     _save_index()
     return {"deleted": tid}
